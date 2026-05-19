@@ -1,0 +1,4 @@
+interface:
+  display_name: "Linux EROFS Thread"
+  short_description: "Summarize linux-erofs lore threads"
+  default_prompt: "Use $linux-erofs-thread to summarize this linux-erofs lore thread and save patches if needed."
