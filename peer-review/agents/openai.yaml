@@ -1,0 +1,4 @@
+interface:
+  display_name: "Peer Review"
+  short_description: "Mutual cross-agent validation for code reviews"
+  default_prompt: "Use $peer-review to review this code with mutual cross-agent proposing and critical finding audits."
