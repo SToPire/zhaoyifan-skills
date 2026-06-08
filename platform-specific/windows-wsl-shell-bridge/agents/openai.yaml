@@ -1,0 +1,3 @@
+display_name: Windows WSL Shell Bridge
+short_description: Run complex WSL shell scripts from Windows PowerShell without quoting damage.
+default_prompt: Use the Windows WSL shell bridge to run a complex Bash script from PowerShell.
