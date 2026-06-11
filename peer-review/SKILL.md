@@ -185,6 +185,30 @@ If the peer agent could not be run, do not pretend peer review happened. State t
 
 Because peer-agent CLIs differ, adapt invocation to the installed tool. Prefer passing the prompt through stdin or a temporary prompt file so quoting does not corrupt code snippets.
 
+For long-running non-interactive peer CLIs, prefer an output mode that exposes progress before the final answer. This is especially important for `claude -p`, whose default text output may stay silent until the whole turn finishes even while the agent is actively reading files, running tools, or using subagents. When Claude Code is the peer agent, use streaming JSON when available and save it for inspection:
+
+```bash
+timeout 1800 claude -p \
+  --permission-mode dontAsk \
+  --verbose \
+  --output-format stream-json \
+  --include-partial-messages \
+  --add-dir <repo or worktree path> < "$tmp_prompt" \
+  | tee <peer-output.jsonl>
+```
+
+In current Claude Code versions, `--output-format stream-json` requires `--verbose` when used with `--print`/`-p`; keep the two options together.
+
+Also keep prompts out of the positional argument list when using `--add-dir`.
+`--add-dir` accepts one or more directory arguments, so a prompt placed after it
+can be parsed as another directory and leave `claude -p` with no input. Pass the
+prompt through stdin, as in the example above, or put `--add-dir` after the
+prompt only when the CLI invocation has been tested for that exact version.
+
+Treat the stream and the peer agent's local session logs as liveness evidence. If the process has no final stdout yet, inspect recent stream events, session logs, process state, and network connections before deciding it is hung. If the stream shows ongoing tool calls, partial messages, or log growth, report that the peer is still making progress and continue waiting when the user's task allows it.
+
+Do not reduce the peer agent's review scope merely to make the command faster. Keeping the peer free to explore, use subagents, and follow suspicious paths is part of the value of this skill. Only restrict tools or switch to a smaller prompt when the user explicitly asks for a faster or narrower review, or when the peer CLI cannot make progress with the full review target.
+
 Example pattern:
 
 ```bash
