@@ -119,7 +119,6 @@ def format_item(item: dict[str, Any], index: int, language: str, labels: dict[st
         discussion = pangu(discussion)
 
     lines = [
-        f'<a id="item-{index}"></a>',
         f"## {markdown_link(title, url)} ⭐ {score_text}/10",
         "",
         summary,
@@ -191,7 +190,7 @@ def main() -> None:
             title = item_title(item, language)
             score = item.get("ai_score")
             score_text = "?" if score is None else f"{float(score):g}"
-            toc.append(f"{i}. [{title}](#item-{i}) ⭐ {score_text}/10")
+            toc.append(f"{i}. {title} ⭐ {score_text}/10")
         body = "\n".join(toc) + "\n\n---\n\n"
         body += "\n".join(format_item(item, i, language, labels) for i, item in enumerate(items, start=1))
 

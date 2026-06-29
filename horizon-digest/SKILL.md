@@ -1,13 +1,13 @@
 ---
 name: horizon-digest
-description: Generate a technical information digest from configured web sources using deterministic local scripts for fetching, filtering, validation, and rendering, while the active agent performs scoring, topic deduplication, and enrichment from staged JSON artifacts. Use when asked to create a daily/weekly technical digest, rank fetched source items, produce scored_items/enriched_items artifacts, or render a Chinese or English Markdown digest from RSS, Hacker News, GitHub, Reddit, or OSS Insight sources.
+description: Generate a technical information digest from configured web sources using deterministic local scripts for fetching, filtering, validation, rendering, and optional JSON-configured webhook delivery, while the active agent performs scoring, topic deduplication, and enrichment from staged JSON artifacts. Use when asked to create a daily/weekly technical digest, rank fetched source items, produce scored_items/enriched_items artifacts, render a Chinese or English Markdown digest, or push the rendered digest through a configured webhook from RSS, Hacker News, GitHub, Reddit, or OSS Insight sources.
 ---
 
 # Horizon Digest
 
 ## Overview
 
-Build a digest as a staged artifact workflow. Scripts do deterministic work: fetch, normalize, merge URLs, pack batches, validate JSON, filter, and render Markdown. The active agent performs the judgment steps by reading staged JSON and writing strict JSON artifacts.
+Build a digest as a staged artifact workflow. Scripts do deterministic work: fetch, normalize, merge URLs, pack batches, validate JSON, filter, render Markdown, and optionally send the rendered digest to a webhook. The active agent performs the judgment steps by reading staged JSON and writing strict JSON artifacts.
 
 Keep the workflow portable across coding agents. Do not assume one agent product, model API, connector, or host app.
 
@@ -72,7 +72,15 @@ python <skill>/scripts/validate_enriched_items.py --items <run>/filtered_items.j
 python <skill>/scripts/render_summary.py --config <config.json> --items <run>/enriched_items.json --meta <run>/meta.json --out <run>/summary-zh.md --language zh
 ```
 
-15. Report artifact paths, counts, selected items, and any source warnings.
+15. If `webhook.enabled` is true in the config, send the rendered summary through the configured webhook:
+
+```bash
+python <skill>/scripts/send_webhook.py --config <config.json> --summary <run>/summary-zh.md --items <run>/enriched_items.json --meta <run>/meta.json --out <run>/webhook_result.json --language zh
+```
+
+If the webhook URL is provided through `webhook.url_env`, run the command in an environment where that variable is already loaded. If the variable is only set by shell startup files, invoke the command through that shell so the variable is visible.
+
+16. Report artifact paths, counts, selected items, source warnings, and `webhook_result.json` when webhook delivery was attempted.
 
 ## Judgment Artifacts
 
