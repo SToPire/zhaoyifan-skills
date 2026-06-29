@@ -1,0 +1,4 @@
+interface:
+  display_name: "Horizon Digest"
+  short_description: "Generate technical digests from source feeds"
+  default_prompt: "Use $horizon-digest to generate a concise technical digest from the configured sources."
