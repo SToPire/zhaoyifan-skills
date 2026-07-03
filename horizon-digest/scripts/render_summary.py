@@ -3,10 +3,10 @@ import argparse
 import html
 import re
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
-from _common import load_config, load_items, load_json
+from _common import DEFAULT_DIGEST_TZ, default_digest_date, load_config, load_items, load_json
 
 
 CJK = r"[\u4e00-\u9fff\u3400-\u4dbf]"
@@ -72,7 +72,7 @@ def source_line(item: dict[str, Any], language: str, labels: dict[str, str]) -> 
     published = str(item.get("published_at") or "")
     if published:
         try:
-            dt = datetime.fromisoformat(published.replace("Z", "+00:00")).astimezone(timezone.utc)
+            dt = datetime.fromisoformat(published.replace("Z", "+00:00")).astimezone(DEFAULT_DIGEST_TZ)
             if language == "zh":
                 parts.append(f"{dt.month}月{dt.day}日 {dt:%H:%M}")
             else:
@@ -175,7 +175,7 @@ def main() -> None:
     items = load_items(args.items)
     meta = load_json(args.meta) if args.meta else {}
     total = int(meta.get("raw_count") or meta.get("total_fetched") or len(items))
-    date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date = args.date or default_digest_date()
 
     header = (
         f"# {labels['header']} - {date}\n\n"

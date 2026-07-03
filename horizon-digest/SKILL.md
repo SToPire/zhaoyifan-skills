@@ -72,6 +72,8 @@ python <skill>/scripts/validate_enriched_items.py --items <run>/filtered_items.j
 python <skill>/scripts/render_summary.py --config <config.json> --items <run>/enriched_items.json --meta <run>/meta.json --out <run>/summary-zh.md --language zh
 ```
 
+When `--date` is omitted, render and webhook scripts use the UTC+8 digest date. Pass `--date YYYY-MM-DD` only when the digest should be labeled with a specific date.
+
 15. If `webhook.enabled` is true in the config, send the rendered summary through the configured webhook:
 
 ```bash

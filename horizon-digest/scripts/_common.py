@@ -2,12 +2,13 @@ import html
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 
 ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+DEFAULT_DIGEST_TZ = timezone(timedelta(hours=8), "UTC+08:00")
 
 
 def expand_env(value: Any) -> Any:
@@ -56,6 +57,13 @@ def extract_items(payload: Any) -> list[dict[str, Any]]:
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def default_digest_date(now: datetime | None = None) -> str:
+    current = now or datetime.now(DEFAULT_DIGEST_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=DEFAULT_DIGEST_TZ)
+    return current.astimezone(DEFAULT_DIGEST_TZ).strftime("%Y-%m-%d")
 
 
 def iso_now() -> str:

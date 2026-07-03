@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from _common import load_config, load_items, load_json, write_json
+from _common import default_digest_date, load_config, load_items, load_json, write_json
 
 
 PLACEHOLDER_RE = re.compile(r"#\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -195,7 +195,7 @@ def main() -> int:
     config = load_config(args.config)
     webhook = config.get("webhook") or {}
     language = args.language or (config.get("languages") or ["zh"])[0]
-    date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date = args.date or default_digest_date()
 
     if not webhook.get("enabled", False):
         result = {"enabled": False, "skipped": True, "reason": "webhook disabled"}

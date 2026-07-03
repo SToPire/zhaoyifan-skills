@@ -16,6 +16,9 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import fetch_sources  # noqa: E402
+import render_summary  # noqa: E402
+import send_webhook  # noqa: E402
+from _common import default_digest_date  # noqa: E402
 from merge_url_duplicates import merge_items  # noqa: E402
 
 
@@ -52,6 +55,25 @@ class ReviewFixTests(unittest.TestCase):
         ]
 
         self.assertEqual(len(merge_items(items)), 2)
+
+    def test_default_digest_date_uses_utc_plus_8_boundary(self) -> None:
+        utc_boundary = datetime(2026, 7, 2, 18, 4, tzinfo=timezone.utc)
+
+        self.assertEqual(default_digest_date(utc_boundary), "2026-07-03")
+        self.assertIs(render_summary.default_digest_date, default_digest_date)
+        self.assertIs(send_webhook.default_digest_date, default_digest_date)
+
+    def test_render_summary_source_line_uses_utc_plus_8(self) -> None:
+        item = {
+            "source_type": "hackernews",
+            "published_at": "2026-07-02T18:04:39+00:00",
+            "metadata": {},
+        }
+
+        self.assertIn(
+            "7月3日 02:04",
+            render_summary.source_line(item, "zh", render_summary.LABELS["zh"]),
+        )
 
     def test_reddit_skips_malformed_post_without_aborting_source(self) -> None:
         payload = {
