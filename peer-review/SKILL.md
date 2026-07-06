@@ -188,7 +188,7 @@ Because peer-agent CLIs differ, adapt invocation to the installed tool. Prefer p
 For long-running non-interactive peer CLIs, prefer an output mode that exposes progress before the final answer. This is especially important for `claude -p`, whose default text output may stay silent until the whole turn finishes even while the agent is actively reading files, running tools, or using subagents. When Claude Code is the peer agent, use streaming JSON when available and save it for inspection:
 
 ```bash
-timeout 1800 claude -p \
+claude -p \
   --permission-mode dontAsk \
   --verbose \
   --output-format stream-json \
@@ -206,6 +206,8 @@ prompt through stdin, as in the example above, or put `--add-dir` after the
 prompt only when the CLI invocation has been tested for that exact version.
 
 Treat the stream and the peer agent's local session logs as liveness evidence. If the process has no final stdout yet, inspect recent stream events, session logs, process state, and network connections before deciding it is hung. If the stream shows ongoing tool calls, partial messages, or log growth, report that the peer is still making progress and continue waiting when the user's task allows it.
+
+Do not terminate the peer reviewer merely because it is slow. Peer review can be valuable precisely because the second agent has time to explore, so slowness alone is not a failure condition. Only stop the peer process when there is concrete evidence that it cannot work normally, such as network failures, authentication or quota exhaustion, repeated API errors, a dead process, or no liveness evidence after checking the stream, logs, process state, and network state. If you stop the peer process, record the observed failure and explain the fallback in the final response.
 
 Do not reduce the peer agent's review scope merely to make the command faster. Keeping the peer free to explore, use subagents, and follow suspicious paths is part of the value of this skill. Only restrict tools or switch to a smaller prompt when the user explicitly asks for a faster or narrower review, or when the peer CLI cannot make progress with the full review target.
 
