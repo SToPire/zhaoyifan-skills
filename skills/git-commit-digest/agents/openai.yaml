@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Commit Digest"
+  short_description: "Analyze new Git commits and generate Chinese digests"
+  default_prompt: "Use $git-commit-digest to analyze newly added commits in the subscribed Git repositories and produce a Chinese digest."
