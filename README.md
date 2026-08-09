@@ -5,6 +5,7 @@ A collection of reusable agent skills organized according to the
 
 ## Available Skills
 
+- `git-commit-digest`: Analyze new commits from subscribed Git repositories and produce a Chinese digest.
 - `horizon-digest`: Build technical digests from configured web sources.
 - `linux-erofs-thread`: Analyze linux-erofs mailing-list threads and patch series.
 - `paper-reading`: Produce structured Chinese reports for arXiv papers.
