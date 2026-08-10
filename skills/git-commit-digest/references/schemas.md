@@ -85,10 +85,23 @@ When no commits were fetched, write:
 
 ## Script-Generated Files
 
-- `raw_commits.json`: repository metadata, bounded commit messages/file lists/patches with truncation flags, and per-repository status.
+- `raw_commits.json`: repository metadata, exact coverage metadata, bounded commit messages/file lists/patches with truncation flags, and per-repository status.
 - `analyzed_commits.json`: `raw_commits.json` with validated `analysis` objects merged into commits.
 - `validated_digest.json`: normalized and coverage-checked digest input.
 - `base_state.json`: validated state snapshot read at fetch time; compare it during state promotion.
 - `next_state.json`: pending default-branch names and HEADs, plus preserved first-subscription time/HEAD baselines for repositories that have not yet succeeded; promote it only after rendering succeeds.
 - `meta.json`: counts, technical warnings, and structured analysis-evidence truncation details for operators, not report content.
 - `state.json.transaction.json`: temporary finalization journal used to recover report/state consistency after an abrupt process exit; scripts remove it after recovery.
+
+Every `raw_commits.json` repository has a `coverage` object. Successful repositories also include `to_head`:
+
+```json
+{"mode": "incremental", "from_head": "<previous-head>", "to_head": "<current-head>"}
+{"mode": "initial_since", "since": "2026-08-06T12:00:00+00:00", "to_head": "<current-head>"}
+{"mode": "initial_full_history", "to_head": "<current-head>"}
+```
+
+- `incremental` covers commits newly reachable since the last successfully recorded HEAD.
+- `initial_since` covers commits at or after the persisted first-subscription boundary, even when older-dated commits appear earlier in the ancestry walk.
+- `initial_full_history` covers the safely bounded complete history used to recover an interrupted first-subscription discovery.
+- Failed repositories retain their intended coverage mode but omit `to_head` because no current cursor was accepted.

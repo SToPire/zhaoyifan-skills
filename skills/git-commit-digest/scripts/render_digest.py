@@ -35,17 +35,54 @@ def status_label(repository: dict[str, Any]) -> str:
     return "成功"
 
 
-def range_label(repositories: list[dict[str, Any]], initial_hours: int) -> str:
+def coverage_boundary(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("initial_since coverage requires a since timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("initial_since coverage has an invalid since timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("initial_since coverage requires a timezone-aware since timestamp")
+    return parsed.isoformat(timespec="minutes")
+
+
+def repository_range(repository: dict[str, Any], include_name: bool = False) -> str:
+    coverage = repository.get("coverage")
+    if not isinstance(coverage, dict):
+        raise ValueError("every successful repository requires coverage metadata")
+    mode = coverage.get("mode")
+    if mode == "incremental":
+        label = "上次成功状态"
+    elif mode == "initial_since":
+        label = f"自 {coverage_boundary(coverage.get('since'))}"
+    elif mode == "initial_full_history":
+        label = "完整历史"
+    else:
+        raise ValueError(f"unsupported repository coverage mode: {mode!r}")
+    if include_name:
+        return f"{safe_text(repository.get('name') or 'repository')}：{label}"
+    return label
+
+
+def range_label(repositories: list[dict[str, Any]]) -> str:
     successful = [repo for repo in repositories if repo.get("status") == "success"]
     if not successful:
         if repositories and all(repo.get("first_run") for repo in repositories):
             return "首次运行（尚未建立成功状态）"
         return "各仓库上次成功状态 → 本次运行（本次未抓取成功）"
-    if successful and all(repo.get("first_run") for repo in successful):
-        return f"最近 {initial_hours} 小时"
-    if any(repo.get("first_run") for repo in successful):
-        return f"各仓库上次成功状态（首次订阅回溯 {initial_hours} 小时）→ 本次运行"
-    return "上次成功运行 → 本次运行"
+    ranges = [repository_range(repository) for repository in successful]
+    if len(set(ranges)) == 1:
+        only = ranges[0]
+        if only == "上次成功状态":
+            return "上次成功运行 → 本次运行"
+        if only == "完整历史":
+            return "首次订阅完整历史 → 本次运行"
+        return f"首次订阅{only} → 本次运行"
+    details = "；".join(
+        repository_range(repository, include_name=True) for repository in successful
+    )
+    return f"{details} → 本次运行"
 
 
 def render(raw: dict[str, Any], digest: dict[str, Any], date: str | None = None) -> str:
@@ -65,7 +102,7 @@ def render(raw: dict[str, Any], digest: dict[str, Any], date: str | None = None)
         f"# Git Commit Digest · {report_date}",
         "",
         f"生成时间：{generated.strftime('%Y-%m-%d %H:%M')}",
-        f"范围：{range_label(repositories, int(raw.get('initial_backfill_hours', 24)))}",
+        f"范围：{range_label(repositories)}",
         "",
         "| 仓库 | 分支 | 新增 Commit | 变更主题 | 状态 |",
         "| --- | --- | ---: | ---: | --- |",

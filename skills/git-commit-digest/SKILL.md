@@ -33,14 +33,16 @@ Require `config.json` to contain only a JSON array of unique Git remote URLs:
 ]
 ```
 
-Detect each remote's default branch automatically. On first subscription, persist the initial 24-hour boundary and the first observed default-branch HEAD, then reuse both across failed retries. The first report covers time-window commits already in that baseline plus every commit that later becomes reachable from the default branch, regardless of commit date; if discovery was interrupted before a baseline could be recorded, recover by materializing and safely bounding the complete initial history. Replace the temporary baseline with the branch and HEAD only after a report succeeds. On later runs, analyze commits reachable from the current HEAD but not the last successfully recorded HEAD. Handle force-pushes by graph difference only while the saved cursor object remains available; if that object is unavailable or complete coverage exceeds the safety limit, fail that repository and keep its cursor unchanged.
+Detect each remote's default branch and object format automatically. Cache a complete, non-shallow commit graph with a `tree:0` partial-clone filter so date selection can traverse non-monotonic histories without eagerly downloading every tree and blob. On first subscription, persist the initial 24-hour boundary and the first observed default-branch HEAD, then reuse both across failed retries. The first report covers time-window commits already in that baseline plus every commit that later becomes reachable from the default branch, regardless of commit date; if discovery was interrupted before a baseline could be recorded, recover by safely bounding the complete initial history. Replace the temporary baseline with the branch and HEAD only after a report succeeds. On later runs, analyze commits reachable from the current HEAD but not the last successfully recorded HEAD. Handle force-pushes by graph difference only while the saved cursor object remains available; if that object is unavailable or complete coverage exceeds the safety limit, fail that repository and keep its cursor unchanged.
+
+Mirror cache layout is internal and versioned. A cache layout change creates fresh mirrors instead of migrating older caches.
 
 Keep scheduling and credentials outside `config.json`. Let the host automation invoke this workflow on its desired cadence, and use normal Git credential helpers or SSH agents for private remotes.
 
 ## Workflow
 
 1. Create a fresh run ID with subsecond precision (`YYYYMMDD-HHMMSS-ffffff`). Use it for both the run directory and report filename. Never reuse an existing run or report path.
-2. Fetch new commits without checking out or executing repository content. This command first completes any journaled report/state finalization left by an interrupted prior run, then durably creates missing first-subscription boundaries and records each first observed remote HEAD:
+2. Fetch new commits without checking out or executing repository content. This command first completes any journaled report/state finalization left by an interrupted prior run, then durably creates missing first-subscription boundaries, records each first observed remote HEAD, and writes exact per-repository coverage metadata for reporting:
 
 ```bash
 python3 <skill>/scripts/fetch_commits.py \
