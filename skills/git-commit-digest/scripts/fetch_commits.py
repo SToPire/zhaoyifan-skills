@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from _common import (
-    GitCommandError,
+    OBJECT_ID_RE,
     cache_directory_name,
     exclusive_file_lock,
     load_config,
@@ -27,8 +27,6 @@ from _finalize import recover_finalization
 
 
 INITIAL_BACKFILL_HOURS = 24
-INITIAL_FETCH_DEPTH = 4096
-MAX_DEEPEN_ATTEMPTS = 4
 MAX_PATCH_BYTES = 120_000
 MAX_COMMIT_MESSAGE_BYTES = 128_000
 MAX_PARENT_METADATA_BYTES = 64_000
@@ -104,7 +102,7 @@ def detect_default_branch(url: str) -> tuple[str, str]:
         if not choices:
             raise ValueError("remote has no branches and HEAD is not a branch symbolic ref")
         by_name = {branch: sha for branch, sha in choices}
-        if re.fullmatch(r"[0-9a-fA-F]{40,64}", head_sha):
+        if OBJECT_ID_RE.fullmatch(head_sha):
             matching_heads = [choice for choice in choices if choice[1].lower() == head_sha.lower()]
             if len(matching_heads) == 1:
                 return matching_heads[0]
@@ -122,7 +120,7 @@ def detect_default_branch(url: str) -> tuple[str, str]:
             if (
                 len(fields) == 2
                 and fields[1] == "HEAD"
-                and re.fullmatch(r"[0-9a-fA-F]{40,64}", fields[0])
+                and OBJECT_ID_RE.fullmatch(fields[0])
             ):
                 head_sha = fields[0]
                 break
@@ -133,46 +131,70 @@ def ensure_cache(
     url: str,
     branch: str,
     cache_dir: Path,
-    backfill_since: datetime | None,
+    expected_head: str,
 ) -> tuple[Path, str]:
     repo_dir = cache_dir / cache_directory_name(url)
     if not repo_dir.exists():
         repo_dir.parent.mkdir(parents=True, exist_ok=True)
-        run_git(["init", "--bare", str(repo_dir)])
-        run_git(["remote", "add", "origin", url], cwd=repo_dir)
+        # Keep every reachable commit for non-monotonic date traversal while
+        # deferring tree and blob transfer until selected commits are inspected.
+        run_git(
+            [
+                "clone",
+                "--bare",
+                "--no-tags",
+                "--single-branch",
+                f"--branch={branch}",
+                "--filter=tree:0",
+                url,
+                str(repo_dir),
+            ]
+        )
+        cloned_head = run_git(
+            ["rev-parse", f"refs/heads/{branch}"],
+            cwd=repo_dir,
+        ).stdout.strip()
+        run_git(
+            ["update-ref", f"refs/remotes/origin/{branch}", cloned_head],
+            cwd=repo_dir,
+        )
     else:
         bare = run_git(["rev-parse", "--is-bare-repository"], cwd=repo_dir).stdout.strip()
         if bare != "true":
             raise ValueError(f"cache path is not a bare Git repository: {repo_dir}")
         run_git(["remote", "set-url", "origin", url], cwd=repo_dir)
 
+    expected_format = object_format_for_oid(expected_head)
+    actual_format = run_git(
+        ["rev-parse", "--show-object-format"],
+        cwd=repo_dir,
+    ).stdout.strip()
+    if actual_format != expected_format:
+        raise ValueError(
+            f"cache object format is {actual_format}, but remote uses {expected_format}: {repo_dir}"
+        )
+    if (
+        run_git(["rev-parse", "--is-shallow-repository"], cwd=repo_dir).stdout.strip()
+        != "false"
+    ):
+        raise ValueError(f"cache does not contain a complete commit graph: {repo_dir}")
+
     remote_ref = f"refs/remotes/origin/{branch}"
     refspec = f"+refs/heads/{branch}:{remote_ref}"
-    exists = run_git(["show-ref", "--verify", "--quiet", remote_ref], cwd=repo_dir, check=False)
-    fetch_args = ["fetch", "--no-tags"]
-    needs_backfill_boundary = bool(
-        backfill_since
-        and (exists.returncode != 0 or is_shallow(repo_dir))
+    # Never make this fetch shallow: --since-as-filter must be able to walk
+    # through old-dated commits to find newer ancestors.
+    run_git(
+        ["fetch", "--no-tags", "--filter=tree:0", "origin", refspec],
+        cwd=repo_dir,
     )
-    if needs_backfill_boundary:
-        fetch_args.extend(["--update-shallow", f"--shallow-since={backfill_since.isoformat()}"])
-    elif exists.returncode != 0:
-        fetch_args.append(f"--depth={INITIAL_FETCH_DEPTH}")
-    fetch_args.extend(["origin", refspec])
-    try:
-        run_git(fetch_args, cwd=repo_dir)
-    except GitCommandError as exc:
-        error = exc.stderr.lower()
-        if needs_backfill_boundary and "no commits selected for shallow requests" in error:
-            run_git(["fetch", "--no-tags", "--depth=1", "origin", refspec], cwd=repo_dir)
-        elif needs_backfill_boundary and "shallow" in error:
-            run_git(["fetch", "--no-tags", "origin", refspec], cwd=repo_dir)
-        elif exists.returncode != 0 and "shallow" in error:
-            run_git(["fetch", "--no-tags", "origin", refspec], cwd=repo_dir)
-        else:
-            raise
     current_head = run_git(["rev-parse", remote_ref], cwd=repo_dir).stdout.strip()
     return repo_dir, current_head
+
+
+def object_format_for_oid(oid: str) -> str:
+    if not OBJECT_ID_RE.fullmatch(oid):
+        raise ValueError(f"remote advertised an invalid object id: {oid!r}")
+    return "sha1" if len(oid) == 40 else "sha256"
 
 
 def object_exists(repo_dir: Path, revision: str) -> bool:
@@ -180,75 +202,9 @@ def object_exists(repo_dir: Path, revision: str) -> bool:
     return result.returncode == 0
 
 
-def is_shallow(repo_dir: Path) -> bool:
-    return run_git(["rev-parse", "--is-shallow-repository"], cwd=repo_dir).stdout.strip() == "true"
-
-
-def shallow_boundaries(repo_dir: Path) -> set[str]:
-    if not is_shallow(repo_dir):
-        return set()
-    path_text = run_git(["rev-parse", "--git-path", "shallow"], cwd=repo_dir).stdout.strip()
-    shallow_path = Path(path_text)
-    if not shallow_path.is_absolute():
-        shallow_path = repo_dir / shallow_path
-    try:
-        return {
-            line.strip().lower()
-            for line in shallow_path.read_text(encoding="ascii").splitlines()
-            if line.strip()
-        }
-    except FileNotFoundError:
-        return set()
-
-
-def merge_base_exists(repo_dir: Path, old: str, new: str) -> bool:
-    result = run_git(["merge-base", old, new], cwd=repo_dir, check=False)
-    return result.returncode == 0 and bool(result.stdout.strip())
-
-
-def deepen_for_previous_head(repo_dir: Path, branch: str, previous_head: str, current_head: str) -> None:
-    refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
-    for _ in range(MAX_DEEPEN_ATTEMPTS):
-        if object_exists(repo_dir, previous_head) and merge_base_exists(repo_dir, previous_head, current_head):
-            return
-        if not is_shallow(repo_dir):
-            break
-        run_git(
-            ["fetch", "--no-tags", f"--deepen={INITIAL_FETCH_DEPTH}", "origin", refspec],
-            cwd=repo_dir,
-        )
-    if is_shallow(repo_dir):
-        run_git(["fetch", "--no-tags", "--unshallow", "origin", refspec], cwd=repo_dir)
-    if not object_exists(repo_dir, previous_head):
-        run_git(["fetch", "--no-tags", "origin", previous_head], cwd=repo_dir, check=False)
-
-
-def deepen_for_selected_parents(repo_dir: Path, branch: str, shas: list[str]) -> None:
-    selected = {sha.lower() for sha in shas}
-    if not selected:
-        return
-    refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
-    for _ in range(MAX_DEEPEN_ATTEMPTS):
-        if not (selected & shallow_boundaries(repo_dir)):
-            return
-        run_git(["fetch", "--no-tags", "--deepen=1", "origin", refspec], cwd=repo_dir)
-    if selected & shallow_boundaries(repo_dir):
-        run_git(["fetch", "--no-tags", "--unshallow", "origin", refspec], cwd=repo_dir)
-    remaining = selected & shallow_boundaries(repo_dir)
-    if remaining:
-        raise RuntimeError(
-            "cannot materialize parent commits for selected shallow-boundary commits: "
-            + ", ".join(sorted(remaining))
-        )
-
-
-def materialize_full_history(repo_dir: Path, branch: str) -> None:
-    if not is_shallow(repo_dir):
-        return
-    refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
-    run_git(["fetch", "--no-tags", "--unshallow", "origin", refspec], cwd=repo_dir)
-    if is_shallow(repo_dir):
-        raise RuntimeError("full history recovery did not remove the shallow boundary")
+def fetch_missing_commit(repo_dir: Path, revision: str) -> None:
+    if not object_exists(repo_dir, revision):
+        run_git(["fetch", "--no-tags", "origin", revision], cwd=repo_dir, check=False)
 
 
 def is_ancestor(repo_dir: Path, old: str, new: str) -> bool:
@@ -275,7 +231,7 @@ def list_commit_shas(
                 "rev-list",
                 "--reverse",
                 "--topo-order",
-                f"--since={backfill_since.isoformat()}",
+                f"--since-as-filter={backfill_since.isoformat()}",
                 current_head,
             ],
             cwd=repo_dir,
@@ -394,7 +350,7 @@ def read_commit(repo_dir: Path, remote_url: str, repo_id: str, sha: str) -> dict
     parents = [
         value
         for value in parents_raw.split()
-        if re.fullmatch(r"[0-9a-fA-F]{40,64}", value)
+        if OBJECT_ID_RE.fullmatch(value)
     ]
 
     identities, identities_truncated = run_git_stdout_limited(
@@ -572,6 +528,27 @@ def read_commit(repo_dir: Path, remote_url: str, repo_id: str, sha: str) -> dict
     }
 
 
+def coverage_from_state(
+    entry: dict[str, Any] | None,
+    run_started_at: datetime,
+) -> dict[str, Any]:
+    if entry and entry.get("head"):
+        return {
+            "mode": "incremental",
+            "from_head": entry["head"],
+        }
+    if entry and entry.get("initial_full_scan"):
+        return {"mode": "initial_full_history"}
+    if entry and entry.get("initial_since"):
+        since = datetime.fromisoformat(entry["initial_since"])
+    else:
+        since = run_started_at - timedelta(hours=INITIAL_BACKFILL_HOURS)
+    return {
+        "mode": "initial_since",
+        "since": since.isoformat(),
+    }
+
+
 def fetch_repository(
     url: str,
     state: dict[str, Any],
@@ -591,13 +568,13 @@ def fetch_repository(
         backfill_since = datetime.fromisoformat(previous_entry["initial_since"])
     else:
         backfill_since = run_started_at - timedelta(hours=INITIAL_BACKFILL_HOURS)
-    branch, _advertised_head = detect_default_branch(url)
-    repo_dir, current_head = ensure_cache(url, branch, cache_dir, backfill_since)
+    branch, advertised_head = detect_default_branch(url)
+    repo_dir, current_head = ensure_cache(url, branch, cache_dir, advertised_head)
 
     comparison_head = previous_head or initial_head
     comparison_head_available = True
     if comparison_head:
-        deepen_for_previous_head(repo_dir, branch, comparison_head, current_head)
+        fetch_missing_commit(repo_dir, comparison_head)
         comparison_head_available = object_exists(repo_dir, comparison_head)
     if initial_head and not comparison_head_available:
         raise RuntimeError(
@@ -613,7 +590,6 @@ def fetch_repository(
     )
     if initial_head:
         if previous_entry.get("initial_full_scan"):
-            materialize_full_history(repo_dir, branch)
             initial_shas = list_rewritten_commit_shas(repo_dir, initial_head, None)
         else:
             initial_shas = list_commit_shas(repo_dir, initial_head, None, backfill_since)
@@ -637,8 +613,9 @@ def fetch_repository(
         shas = list_rewritten_commit_shas(repo_dir, current_head, previous_head)
     else:
         shas = list_commit_shas(repo_dir, current_head, previous_head, backfill_since)
-    deepen_for_selected_parents(repo_dir, branch, shas)
     commits = [read_commit(repo_dir, url, repo_id, sha) for sha in shas]
+    coverage = coverage_from_state(previous_entry, run_started_at)
+    coverage["to_head"] = current_head
     result = {
         "id": repo_id,
         "name": name,
@@ -648,6 +625,7 @@ def fetch_repository(
         "initial_head": initial_head,
         "current_head": current_head,
         "first_run": previous_head is None,
+        "coverage": coverage,
         "branch_changed": bool(
             comparison_head
             and (previous_entry.get("branch") or previous_entry.get("initial_branch")) != branch
@@ -748,18 +726,20 @@ def main() -> None:
                     f"{repository['name']}: {files_truncated_count} commit file list(s) were truncated"
                 )
         except Exception as exc:
+            state_entry = state["repositories"].get(url)
             if url in state["repositories"]:
-                next_state["repositories"][url] = state["repositories"][url]
+                next_state["repositories"][url] = state_entry
             repositories.append(
                 {
                     "id": repository_id(url),
                     "name": repository_name(url),
                     "url": url,
                     "branch": None,
-                    "previous_head": (state["repositories"].get(url) or {}).get("head"),
-                    "initial_head": (state["repositories"].get(url) or {}).get("initial_head"),
+                    "previous_head": (state_entry or {}).get("head"),
+                    "initial_head": (state_entry or {}).get("initial_head"),
                     "current_head": None,
-                    "first_run": not bool((state["repositories"].get(url) or {}).get("head")),
+                    "first_run": not bool((state_entry or {}).get("head")),
+                    "coverage": coverage_from_state(state_entry, run_started_at),
                     "branch_changed": False,
                     "force_push": False,
                     "status": "failed",
@@ -771,7 +751,6 @@ def main() -> None:
 
     payload = {
         "generated_at": run_started_at.isoformat(),
-        "initial_backfill_hours": INITIAL_BACKFILL_HOURS,
         "repositories": repositories,
     }
     write_json(args.out, payload)

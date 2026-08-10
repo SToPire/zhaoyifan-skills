@@ -74,7 +74,7 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "JSON array"):
                 load_config(invalid)
 
-    def test_first_run_backfill_is_not_clipped_by_initial_depth(self) -> None:
+    def test_first_run_backfill_traverses_the_complete_commit_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "source"
@@ -86,14 +86,76 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                 for index in range(5)
             ]
 
-            with mock.patch.object(fetch_commits, "INITIAL_FETCH_DEPTH", 2):
-                repository, _next_state = fetch_commits.fetch_repository(
-                    source.as_uri(),
-                    {"repositories": {}},
-                    root / "mirrors",
-                )
+            repository, _next_state = fetch_commits.fetch_repository(
+                source.as_uri(),
+                {"repositories": {}},
+                root / "mirrors",
+            )
 
             self.assertEqual([item["sha"] for item in repository["commits"]], expected)
+
+    def test_first_run_traverses_past_an_old_dated_head(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            run(["git", "init", "-b", "main", str(source)])
+            run(["git", "config", "user.name", "Digest Test"], cwd=source)
+            run(["git", "config", "user.email", "digest@example.com"], cwd=source)
+            run(["git", "config", "uploadpack.allowFilter", "true"], cwd=source)
+            expected = commit(
+                source,
+                "history.txt",
+                "recent parent\n",
+                "core: recent parent",
+                date="2026-08-10T00:00:00+00:00",
+            )
+            commit(
+                source,
+                "history.txt",
+                "recent parent\nold-dated head\n",
+                "core: old-dated head",
+                date="2020-01-01T00:00:00+00:00",
+            )
+
+            repository, _next_state = fetch_commits.fetch_repository(
+                source.as_uri(),
+                {"repositories": {}},
+                root / "mirrors",
+                datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
+            )
+            cache = root / "mirrors" / _common.cache_directory_name(source.as_uri())
+
+            self.assertEqual([item["sha"] for item in repository["commits"]], [expected])
+            self.assertEqual(repository["coverage"]["mode"], "initial_since")
+            self.assertIn("recent parent", repository["commits"][0]["patch"])
+            self.assertEqual(
+                run(["git", "rev-parse", "--is-shallow-repository"], cwd=cache).stdout.strip(),
+                "false",
+            )
+
+    def test_sha256_repository_uses_a_sha256_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            run(["git", "init", "--object-format=sha256", "-b", "main", str(source)])
+            run(["git", "config", "user.name", "Digest Test"], cwd=source)
+            run(["git", "config", "user.email", "digest@example.com"], cwd=source)
+            run(["git", "config", "uploadpack.allowFilter", "true"], cwd=source)
+            expected = commit(source, "sha256.txt", "sha256\n", "core: add sha256 content")
+
+            repository, _next_state = fetch_commits.fetch_repository(
+                source.as_uri(),
+                {"repositories": {}},
+                root / "mirrors",
+            )
+            cache = root / "mirrors" / _common.cache_directory_name(source.as_uri())
+
+            self.assertEqual(len(expected), 64)
+            self.assertEqual([item["sha"] for item in repository["commits"]], [expected])
+            self.assertEqual(
+                run(["git", "rev-parse", "--show-object-format"], cwd=cache).stdout.strip(),
+                "sha256",
+            )
 
     def test_first_run_reuses_its_persisted_boundary_after_a_late_retry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -135,6 +197,14 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             )
             self.assertTrue(repository["first_run"])
             self.assertEqual([item["sha"] for item in repository["commits"]], [expected])
+            self.assertEqual(
+                repository["coverage"],
+                {
+                    "mode": "initial_since",
+                    "since": "2026-08-06T12:00:00+00:00",
+                    "to_head": expected,
+                },
+            )
 
     def test_first_run_includes_old_dated_commits_reachable_after_initial_head(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -219,8 +289,9 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             )
 
             self.assertEqual([item["sha"] for item in repository["commits"]], expected)
+            self.assertEqual(repository["coverage"]["mode"], "initial_full_history")
 
-    def test_first_run_materializes_parent_beyond_shallow_time_boundary(self) -> None:
+    def test_first_run_materializes_selected_commit_trees_from_partial_clone(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "source"
@@ -286,7 +357,7 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             self.assertFalse(repository["first_run"])
             self.assertEqual([item["sha"] for item in repository["commits"]], [current])
 
-    def test_missing_cache_deepens_until_the_saved_cursor_is_connected(self) -> None:
+    def test_missing_cache_recovers_the_saved_cursor_from_the_complete_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "source"
@@ -309,15 +380,11 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                     source.as_uri(): {"branch": "main", "head": previous}
                 }
             }
-            with (
-                mock.patch.object(fetch_commits, "INITIAL_FETCH_DEPTH", 2),
-                mock.patch.object(fetch_commits, "MAX_DEEPEN_ATTEMPTS", 1),
-            ):
-                repository, _next_state = fetch_commits.fetch_repository(
-                    source.as_uri(),
-                    state,
-                    root / "new-mirrors",
-                )
+            repository, _next_state = fetch_commits.fetch_repository(
+                source.as_uri(),
+                state,
+                root / "new-mirrors",
+            )
             self.assertEqual([item["sha"] for item in repository["commits"]], expected)
 
     def test_pruned_force_push_does_not_advance_without_the_saved_cursor(self) -> None:
@@ -365,7 +432,7 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             shared = commit(source, "history.txt", "one\ntwo\n", "core: two")
             previous = commit(source, "history.txt", "one\ntwo\nthree\n", "core: three")
             cache = root / "mirrors"
-            fetch_commits.ensure_cache(source.as_uri(), "main", cache, None)
+            fetch_commits.ensure_cache(source.as_uri(), "main", cache, previous)
             run(["git", "reset", "--hard", shared], cwd=source)
             commit(source, "history.txt", "one\ntwo\nrewritten\n", "core: rewritten")
             state = {"repositories": {source.as_uri(): {"branch": "main", "head": previous}}}
@@ -762,7 +829,56 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             {"status": "failed", "first_run": True},
             {"status": "failed", "first_run": True},
         ]
-        self.assertEqual(range_label(repositories, 24), "首次运行（尚未建立成功状态）")
+        self.assertEqual(range_label(repositories), "首次运行（尚未建立成功状态）")
+
+    def test_range_label_uses_the_persisted_initial_boundary(self) -> None:
+        repositories = [
+            {
+                "status": "success",
+                "first_run": True,
+                "coverage": {
+                    "mode": "initial_since",
+                    "since": "2026-08-06T12:00:00+00:00",
+                },
+            }
+        ]
+        self.assertEqual(
+            range_label(repositories),
+            "首次订阅自 2026-08-06T12:00+00:00 → 本次运行",
+        )
+
+    def test_range_label_reports_full_history_recovery(self) -> None:
+        repositories = [
+            {
+                "status": "success",
+                "first_run": True,
+                "coverage": {"mode": "initial_full_history"},
+            }
+        ]
+        self.assertEqual(range_label(repositories), "首次订阅完整历史 → 本次运行")
+
+    def test_range_label_reports_mixed_repository_coverage(self) -> None:
+        repositories = [
+            {
+                "name": "linux",
+                "status": "success",
+                "first_run": False,
+                "coverage": {"mode": "incremental"},
+            },
+            {
+                "name": "erofs-utils",
+                "status": "success",
+                "first_run": True,
+                "coverage": {
+                    "mode": "initial_since",
+                    "since": "2026-08-06T12:00:00+00:00",
+                },
+            },
+        ]
+        self.assertEqual(
+            range_label(repositories),
+            "linux：上次成功状态；erofs-utils：自 2026-08-06T12:00+00:00 → 本次运行",
+        )
 
     def test_end_to_end_incremental_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -887,6 +1003,7 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             )
             rendered = report.read_text(encoding="utf-8")
             self.assertIn("# Git Commit Digest · 2026-08-07", rendered)
+            self.assertIn("范围：首次订阅自 ", rendered)
             self.assertIn("## 今日概览", rendered)
             self.assertIn("### core：增加第一项行为", rendered)
             self.assertNotIn("异常与限制", rendered)
@@ -1127,7 +1244,6 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                 raw,
                 {
                     "generated_at": "2026-08-07T01:00:00+00:00",
-                    "initial_backfill_hours": 24,
                     "repositories": [
                         {
                             "id": "repo",
@@ -1135,6 +1251,7 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                             "branch": "main",
                             "status": "success",
                             "first_run": False,
+                            "coverage": {"mode": "incremental"},
                             "commits": [],
                         }
                     ],
@@ -1186,7 +1303,6 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                 commits,
                 {
                     "generated_at": "2026-08-07T01:00:00+00:00",
-                    "initial_backfill_hours": 24,
                     "repositories": [],
                 },
             )

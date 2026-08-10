@@ -19,6 +19,8 @@ from urllib.parse import urlsplit
 ALLOWED_URL_SCHEMES = {"http", "https", "ssh", "git", "file"}
 SCP_URL_RE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:.+$")
 SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+CACHE_FORMAT_VERSION = 2
+OBJECT_ID_RE = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
 
 
 class GitCommandError(RuntimeError):
@@ -146,7 +148,7 @@ def load_state(path: str | Path) -> dict[str, Any]:
         if head is not None:
             if not isinstance(branch, str) or not branch:
                 raise ValueError(f"state entry for {url!r} has an invalid branch")
-            if not isinstance(head, str) or not re.fullmatch(r"[0-9a-fA-F]{40,64}", head):
+            if not isinstance(head, str) or not OBJECT_ID_RE.fullmatch(head):
                 raise ValueError(f"state entry for {url!r} has an invalid head")
             if any(
                 value is not None
@@ -169,9 +171,7 @@ def load_state(path: str | Path) -> dict[str, Any]:
         if initial_branch is not None or initial_head is not None:
             if not isinstance(initial_branch, str) or not initial_branch:
                 raise ValueError(f"state entry for {url!r} has an invalid initial_branch")
-            if not isinstance(initial_head, str) or not re.fullmatch(
-                r"[0-9a-fA-F]{40,64}", initial_head
-            ):
+            if not isinstance(initial_head, str) or not OBJECT_ID_RE.fullmatch(initial_head):
                 raise ValueError(f"state entry for {url!r} has an invalid initial_head")
             normalized_initial.update(
                 {"initial_branch": initial_branch, "initial_head": initial_head.lower()}
@@ -360,7 +360,10 @@ def repository_id(url: str) -> str:
 
 
 def cache_directory_name(url: str) -> str:
-    return f"{repository_name(url)}-{repository_id(url)[:10]}.git"
+    return (
+        f"{repository_name(url)}-{repository_id(url)[:10]}"
+        f"-v{CACHE_FORMAT_VERSION}.git"
+    )
 
 
 def extract_items(payload: Any, key: str = "items") -> list[dict[str, Any]]:

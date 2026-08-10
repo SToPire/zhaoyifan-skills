@@ -6,7 +6,7 @@ Render a Simplified Chinese Markdown report with this fixed structure:
 # Git Commit Digest · <YYYY-MM-DD>
 
 生成时间：<local date and time>
-范围：<last successful state to current run, or first-run 24-hour backfill>
+范围：<exact persisted initial boundary, complete-history recovery, or last successful state to current run>
 
 | 仓库 | 分支 | 新增 Commit | 变更主题 | 状态 |
 | --- | --- | ---: | ---: | --- |
@@ -41,6 +41,7 @@ Render a Simplified Chinese Markdown report with this fixed structure:
 Rules:
 
 - Show every configured repository in the summary table.
+- Derive the range line from each repository's `coverage` metadata. Show the persisted timestamp for `initial_since`, say `完整历史` for `initial_full_history`, and identify repository-specific ranges when successful repositories use different modes or boundaries.
 - Render detailed sections only for successful repositories with new commits.
 - List every commit under exactly one topic.
 - Link commit SHAs when the remote has a known HTTP commit URL.
