@@ -1,0 +1,4 @@
+interface:
+  display_name: "Send Webhook"
+  short_description: "Send rendered reports through configured webhooks"
+  default_prompt: "Use $send-webhook to deliver a rendered report through a configured webhook and record the result."

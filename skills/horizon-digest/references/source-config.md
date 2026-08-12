@@ -66,30 +66,6 @@ Starter config:
     "category_groups": {},
     "default_group": "other",
     "default_group_limit": null
-  },
-  "webhook": {
-    "enabled": false,
-    "url_env": "HIBOARD_WEBHOOK_URL",
-    "languages": ["zh"],
-    "request_body": {
-      "data": {
-        "authCode": "${HIBOARD_AUTH_CODE}",
-        "msgContent": [
-          {
-            "msgId": "horizon_#{date}_#{language}_#{timestamp}",
-            "scheduleTaskId": "horizon_summary_#{date}_#{language}",
-            "scheduleTaskName": "#{message_title}",
-            "summary": "#{message_title}",
-            "result": "#{result}",
-            "content": "#{summary}",
-            "source": "horizon",
-            "taskFinishTime": "#{timestamp}"
-          }
-        ]
-      }
-    },
-    "headers": "x-trace-id: horizon_#{date}_#{language}_#{timestamp}",
-    "success_body_contains": ["0000000000", "OK"]
   }
 }
 ```
@@ -102,28 +78,11 @@ Supported source types in the first version:
 - `reddit`: public subreddit JSON.
 - `ossinsight`: OSS Insight trending repositories.
 
-## Webhook delivery
-
-The `webhook` block is optional. It is disabled unless `webhook.enabled` is `true`.
-
-Supported fields:
-
-- `enabled`: set to `true` to send the rendered summary after `render_summary.py`.
-- `url_env`: environment variable containing the webhook URL. Prefer this for secrets.
-- `url`: literal URL or a string containing `${VAR_NAME}` environment references. Use this only when storing the URL in config is acceptable.
-- `languages`: optional list of digest languages to send.
-- `request_body`: optional string, object, or array. Objects and arrays are sent as JSON. Strings that parse as JSON are sent as JSON; other strings are sent as form data.
-- `headers`: optional dict or newline-separated `Name: Value` lines.
-- `message_title`: optional title template.
-- `variables`: optional object of extra template variables.
-- `success_body_contains`: optional string or list of strings that must appear in the response body in addition to a 2xx HTTP status.
-
-Template placeholders use `#{name}`. Built-in variables include `date`, `language`, `summary`, `important_items`, `selected_items`, `item_count`, `all_items`, `all_items_count`, `result`, `message_title`, `message_kind`, and `timestamp`.
-
 Optional environment variables:
 
 - `GITHUB_TOKEN`: increases GitHub rate limits.
 - Any variable referenced inside RSS URLs, such as `${LWN_KEY}`.
-- Any variable referenced by `webhook.url_env`, `webhook.url`, or `webhook.request_body`.
+
+Keep webhook target settings outside this source config. Optional delivery uses the internal `send-webhook` dependency and its dedicated config.
 
 Source failures should be recorded as warnings and should not abort the whole digest unless no items are fetched.
