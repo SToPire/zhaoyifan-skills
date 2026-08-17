@@ -1,15 +1,19 @@
 ---
 name: horizon-digest
-description: Generate a technical information digest from configured web sources using deterministic local scripts for fetching, filtering, validation, rendering, and optional JSON-configured webhook delivery, while the active agent performs scoring, topic deduplication, and enrichment from staged JSON artifacts. Use when asked to create a daily/weekly technical digest, rank fetched source items, produce scored_items/enriched_items artifacts, render a Chinese or English Markdown digest, or push the rendered digest through a configured webhook from RSS, Hacker News, GitHub, Reddit, or OSS Insight sources.
+description: Generate a technical information digest from configured web sources using deterministic local scripts for fetching, filtering, validation, and rendering, while the active agent performs scoring, topic deduplication, and enrichment from staged JSON artifacts. Use when asked to create a daily/weekly technical digest, rank fetched source items, produce scored_items/enriched_items artifacts, or render a Chinese or English Markdown digest from RSS, Hacker News, GitHub, Reddit, or OSS Insight sources. Optional webhook delivery requires the separately installed internal send-webhook skill.
 ---
 
 # Horizon Digest
 
 ## Overview
 
-Build a digest as a staged artifact workflow. Scripts do deterministic work: fetch, normalize, merge URLs, pack batches, validate JSON, filter, render Markdown, and optionally send the rendered digest to a webhook. The active agent performs the judgment steps by reading staged JSON and writing strict JSON artifacts.
+Build a digest as a staged artifact workflow. Scripts do deterministic work: fetch, normalize, merge URLs, pack batches, validate JSON, filter, and render Markdown. The active agent performs the judgment steps by reading staged JSON and writing strict JSON artifacts.
 
 Keep the workflow portable across coding agents. Do not assume one agent product, model API, connector, or host app.
+
+## Dependency
+
+Treat `send-webhook` as an internal runtime dependency for optional webhook delivery. Digest generation does not require it. When delivery is requested, require the separately installed skill and use its script and contracts instead of copying webhook implementation into this skill. If it is unavailable, keep the rendered digest and report that delivery could not start.
 
 ## Workflow
 
@@ -72,17 +76,22 @@ python <skill>/scripts/validate_enriched_items.py --items <run>/filtered_items.j
 python <skill>/scripts/render_summary.py --config <config.json> --items <run>/enriched_items.json --meta <run>/meta.json --out <run>/summary-zh.md --language zh
 ```
 
-When `--date` is omitted, render and webhook scripts use the UTC+8 digest date. Pass `--date YYYY-MM-DD` only when the digest should be labeled with a specific date.
+When `--date` is omitted, the renderer uses the UTC+8 digest date. Pass `--date YYYY-MM-DD` only when the digest should be labeled with a specific date.
 
-15. If `webhook.enabled` is true in the config, send the rendered summary through the configured webhook:
+15. When webhook delivery is requested, write `<run>/webhook_message.json` following the `send-webhook` message schema. Use a stable ID such as `horizon-digest:<run-id>:<language>`, set `kind` to `horizon-digest`, and include `item_count`, `important_items`, `selected_items`, `all_items`, `all_items_count`, and `raw_count` in `variables` when known.
+16. After rendering succeeds, invoke the `send-webhook` dependency with a separately supplied webhook config:
 
 ```bash
-python <skill>/scripts/send_webhook.py --config <config.json> --summary <run>/summary-zh.md --items <run>/enriched_items.json --meta <run>/meta.json --out <run>/webhook_result.json --language zh
+python3 <send-webhook-skill>/scripts/send_webhook.py \
+  --config <webhook-config.json> \
+  --message <run>/webhook_message.json \
+  --content <run>/summary-zh.md \
+  --out <run>/webhook_result.json
 ```
 
-If the webhook URL is provided through `webhook.url_env`, run the command in an environment where that variable is already loaded. If the variable is only set by shell startup files, invoke the command through that shell so the variable is visible.
+Run the dependency in an environment where its configured URL and secret variables are already loaded. A delivery failure does not invalidate or regenerate the rendered digest; retry the same message and content independently.
 
-16. Report artifact paths, counts, selected items, source warnings, and `webhook_result.json` when webhook delivery was attempted.
+17. Report artifact paths, counts, selected items, source warnings, and `webhook_result.json` when webhook delivery was attempted.
 
 ## Judgment Artifacts
 

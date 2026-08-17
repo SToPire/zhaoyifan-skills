@@ -76,26 +76,4 @@ Write either a JSON array or an object with an `items` array:
 
 For Chinese digests, `_zh` fields are required. `_en` fields are optional but useful for future bilingual output. `sources` is optional and should only include URLs that were actually inspected.
 
-## webhook result
-
-When webhook delivery is enabled, write the script result to `webhook_result.json`:
-
-```json
-{
-  "enabled": true,
-  "skipped": false,
-  "dry_run": false,
-  "method": "POST",
-  "url": "https://example.com/webhook?token=***",
-  "headers": {
-    "Content-Type": "application/json",
-    "User-Agent": "horizon-digest-webhook/0.1"
-  },
-  "success": true,
-  "status_code": 200,
-  "body_contains_passed": true,
-  "response_body_preview": "{\"code\":\"0000000000\",\"desc\":\"OK\"}"
-}
-```
-
-If the webhook is disabled, language-filtered, or missing its URL environment variable, the result uses `"skipped": true` and exits successfully. HTTP/network failures or configured response-body checks that do not pass exit non-zero after writing the result.
+Webhook message and result schemas belong to the internal `send-webhook` dependency rather than this skill.
