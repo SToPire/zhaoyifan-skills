@@ -16,18 +16,17 @@ from typing import Any
 
 ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 PLACEHOLDER_RE = re.compile(r"#\{([A-Za-z_][A-Za-z0-9_]*)\}")
-DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SENSITIVE_KEY_PARTS = ("auth", "code", "key", "password", "secret", "token")
 USER_AGENT = "send-webhook/1.0"
 RESERVED_VARIABLES = {
-    "message_id",
-    "message_kind",
-    "message_title",
-    "date",
-    "language",
     "content",
-    "summary",
-    "result",
+    "content_name",
+    "content_path",
+    "content_sha256",
+    "content_size_bytes",
+    "content_stem",
+    "content_title",
+    "target_name",
     "timestamp",
 }
 
@@ -89,9 +88,16 @@ def is_sensitive_key(key: str) -> bool:
 
 def redact_url(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
+    netloc = parsed.netloc
+    if "@" in netloc:
+        userinfo, host = netloc.rsplit("@", 1)
+        redacted_userinfo = "***:***" if ":" in userinfo else "***"
+        netloc = f"{redacted_userinfo}@{host}"
     query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
     redacted_query = [(key, "***" if is_sensitive_key(key) else value) for key, value in query]
-    return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(redacted_query)))
+    return urllib.parse.urlunparse(
+        parsed._replace(netloc=netloc, query=urllib.parse.urlencode(redacted_query))
+    )
 
 
 def redact_headers(headers: dict[str, str]) -> dict[str, str]:
@@ -99,42 +105,40 @@ def redact_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
-    payload = load_json(path)
-    if not isinstance(payload, dict):
+    config = load_json(path)
+    if not isinstance(config, dict):
         raise ValueError("webhook config must be a JSON object")
-    webhook = payload.get("webhook", payload)
-    if not isinstance(webhook, dict):
-        raise ValueError("webhook config must be a JSON object")
-    if not webhook.get("enabled", False):
-        return webhook
-    expanded = expand_env(webhook)
+    if not config.get("enabled", False):
+        return config
+    expanded = expand_env(config)
     unresolved_env = sorted(find_pattern_names(expanded, ENV_RE))
     if unresolved_env:
         raise ValueError(f"unresolved environment variables: {', '.join(unresolved_env)}")
     return expanded
 
 
-def validate_message(path: str | Path) -> dict[str, Any]:
-    message = load_json(path)
-    if not isinstance(message, dict):
-        raise ValueError("message must be a JSON object")
-    for key in ("id", "kind", "title", "date", "language"):
-        value = message.get(key)
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"message.{key} must be a non-empty string")
-    if not DATE_RE.fullmatch(message["date"]):
-        raise ValueError("message.date must use YYYY-MM-DD")
-    try:
-        datetime.strptime(message["date"], "%Y-%m-%d")
-    except ValueError as exc:
-        raise ValueError("message.date must use YYYY-MM-DD") from exc
-    extra = message.get("variables", {})
-    if not isinstance(extra, dict):
-        raise ValueError("message.variables must be an object")
-    conflicts = sorted(RESERVED_VARIABLES.intersection(extra))
+def load_delivery_variables(path: str | Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    variables = load_json(path)
+    if not isinstance(variables, dict):
+        raise ValueError("delivery variables must be a JSON object")
+    conflicts = sorted(RESERVED_VARIABLES.intersection(variables))
     if conflicts:
-        raise ValueError(f"message.variables cannot override built-ins: {', '.join(conflicts)}")
-    return message
+        raise ValueError(f"delivery variables cannot override built-ins: {', '.join(conflicts)}")
+    return variables
+
+
+def markdown_title(content: str, path: Path) -> str:
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = re.fullmatch(r"#{1,6}\s+(.+)", stripped)
+        if match:
+            return match.group(1).strip()
+        break
+    return path.stem
 
 
 def parse_headers(value: Any, variables: dict[str, Any]) -> dict[str, str]:
@@ -155,25 +159,32 @@ def parse_headers(value: Any, variables: dict[str, Any]) -> dict[str, str]:
     return headers
 
 
-def build_variables(config: dict[str, Any], message: dict[str, Any], content: str) -> dict[str, Any]:
+def build_variables(
+    config: dict[str, Any],
+    delivery_variables: dict[str, Any],
+    content: str,
+    content_path: str | Path,
+) -> dict[str, Any]:
+    path = Path(content_path)
+    content_bytes = content.encode("utf-8")
     variables: dict[str, Any] = {
-        "message_id": message["id"],
-        "message_kind": message["kind"],
-        "message_title": message["title"],
-        "date": message["date"],
-        "language": message["language"],
         "content": content,
-        "summary": content,
-        "result": "success",
+        "content_name": path.name,
+        "content_path": str(path),
+        "content_sha256": hashlib.sha256(content_bytes).hexdigest(),
+        "content_size_bytes": len(content_bytes),
+        "content_stem": path.stem,
+        "content_title": markdown_title(content, path),
+        "target_name": str(config.get("name") or "webhook"),
         "timestamp": str(int(datetime.now(timezone.utc).timestamp())),
     }
-    variables.update(message.get("variables", {}))
+    variables.update(delivery_variables)
     config_variables = config.get("variables", {})
     if not isinstance(config_variables, dict):
         raise ValueError("webhook.variables must be an object")
-    conflicts = sorted(RESERVED_VARIABLES.intersection(config_variables))
+    conflicts = sorted(set(variables).intersection(config_variables))
     if conflicts:
-        raise ValueError(f"webhook.variables cannot override built-ins: {', '.join(conflicts)}")
+        raise ValueError(f"webhook.variables cannot override existing variables: {', '.join(conflicts)}")
     unknown = sorted(find_pattern_names(config_variables, PLACEHOLDER_RE) - set(variables))
     if unknown:
         raise ValueError(f"unknown template variables: {', '.join(unknown)}")
@@ -196,7 +207,7 @@ def resolve_url(config: dict[str, Any], variables: dict[str, Any]) -> str:
     url = str(render(str(raw_url), variables)).strip()
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError(f"invalid webhook URL: {url}")
+        raise ValueError(f"invalid webhook URL: {redact_url(url)}")
     return url
 
 
@@ -274,48 +285,45 @@ def send_request(url: str, body: bytes | None, headers: dict[str, str], method: 
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Send an existing artifact through a configured webhook.")
+    parser = argparse.ArgumentParser(description="Send an existing Markdown file through a configured webhook.")
     parser.add_argument("--config", required=True)
-    parser.add_argument("--message", required=True)
     parser.add_argument("--content", required=True)
+    parser.add_argument("--variables", help="Optional JSON object with delivery-specific template variables")
     parser.add_argument("--out")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     request_url = ""
-    message_id = ""
-    message_kind = ""
+    target_name = ""
+    content_sha256 = ""
     try:
         config = load_config(args.config)
+        target_name = str(config.get("name") or "webhook")
         if not config.get("enabled", False):
-            write_result(args.out, {"enabled": False, "skipped": True, "reason": "webhook disabled"})
-            return 0
-
-        message = validate_message(args.message)
-        message_id = message["id"]
-        message_kind = message["kind"]
-        allowed_languages = config.get("languages")
-        if allowed_languages and message["language"] not in allowed_languages:
             write_result(
                 args.out,
                 {
-                    "enabled": True,
+                    "enabled": False,
                     "skipped": True,
-                    "message_id": message["id"],
-                    "reason": f"language {message['language']} filtered by webhook.languages",
+                    "target": target_name,
+                    "reason": "webhook disabled",
                 },
             )
             return 0
 
-        content = Path(args.content).read_text(encoding="utf-8")
-        variables = build_variables(config, message, content)
+        content_path = Path(args.content)
+        content = content_path.read_text(encoding="utf-8")
+        delivery_variables = load_delivery_variables(args.variables)
+        variables = build_variables(config, delivery_variables, content, content_path)
+        content_sha256 = str(variables["content_sha256"])
         request_url, body, headers, method = build_request(config, variables)
         preview = {
             "enabled": True,
             "skipped": False,
             "dry_run": args.dry_run,
-            "message_id": message["id"],
-            "message_kind": message["kind"],
+            "target": target_name,
+            "content_path": str(content_path),
+            "content_sha256": content_sha256,
             "method": method,
             "url": redact_url(request_url),
             "headers": redact_headers(headers),
@@ -348,14 +356,14 @@ def main() -> int:
             "enabled": True,
             "skipped": False,
             "success": False,
+            "target": target_name,
+            "content_path": str(args.content),
+            "content_sha256": content_sha256 or None,
             "status_code": int(exc.code),
             "error": str(exc),
             "response_body_preview": response_body[:2000],
             "url": redact_url(request_url) if request_url else "",
         }
-        if message_id:
-            result["message_id"] = message_id
-            result["message_kind"] = message_kind
         write_result(args.out, result)
         return 1
     except Exception as exc:
@@ -363,12 +371,12 @@ def main() -> int:
             "enabled": True,
             "skipped": False,
             "success": False,
+            "target": target_name or "webhook",
+            "content_path": str(args.content),
+            "content_sha256": content_sha256 or None,
             "error": str(exc),
             "url": redact_url(request_url) if request_url else "",
         }
-        if message_id:
-            result["message_id"] = message_id
-            result["message_kind"] = message_kind
         write_result(args.out, result)
         return 1
 

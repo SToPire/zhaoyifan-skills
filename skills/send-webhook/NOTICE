@@ -1,8 +1,7 @@
 Send Webhook Skill Notice
 
-This skill extracts and generalizes webhook delivery code that was previously bundled with the Horizon Digest skill.
+This standalone skill includes webhook delivery code adapted from the Horizon project.
 
-The original Horizon Digest skill is a skillified reimplementation of Horizon:
 - Project: Horizon
 - Author: Thysrael
 - GitHub: https://github.com/Thysrael/Horizon

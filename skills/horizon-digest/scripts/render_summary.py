@@ -6,7 +6,14 @@ import urllib.parse
 from datetime import datetime
 from typing import Any
 
-from _common import DEFAULT_DIGEST_TZ, default_digest_date, load_config, load_items, load_json
+from _common import (
+    DEFAULT_DIGEST_TZ,
+    default_digest_date,
+    load_config,
+    load_items,
+    load_json,
+    resolve_output_file,
+)
 
 
 CJK = r"[\u4e00-\u9fff\u3400-\u4dbf]"
@@ -163,10 +170,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Render a Markdown digest from enriched items.")
     parser.add_argument("--config", required=True)
     parser.add_argument("--items", required=True)
-    parser.add_argument("--out", required=True)
     parser.add_argument("--meta")
     parser.add_argument("--language", default=None)
     parser.add_argument("--date", default=None)
+    parser.add_argument("--run-id", required=True)
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -176,6 +183,7 @@ def main() -> None:
     meta = load_json(args.meta) if args.meta else {}
     total = int(meta.get("raw_count") or meta.get("total_fetched") or len(items))
     date = args.date or default_digest_date()
+    output = resolve_output_file(args.config, config, run_id=args.run_id, date=date)
 
     header = (
         f"# {labels['header']} - {date}\n\n"
@@ -194,9 +202,10 @@ def main() -> None:
         body = "\n".join(toc) + "\n\n---\n\n"
         body += "\n".join(format_item(item, i, language, labels) for i, item in enumerate(items, start=1))
 
-    with open(args.out, "w", encoding="utf-8") as f:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with open(output, "x", encoding="utf-8") as f:
         f.write(header + body)
-    print(args.out)
+    print(output)
 
 
 if __name__ == "__main__":

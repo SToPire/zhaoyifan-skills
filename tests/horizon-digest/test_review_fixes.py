@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -15,7 +17,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import fetch_sources  # noqa: E402
 import render_summary  # noqa: E402
-from _common import default_digest_date  # noqa: E402
+from _common import default_digest_date, load_config, resolve_output_file  # noqa: E402
 from merge_url_duplicates import merge_items  # noqa: E402
 
 
@@ -40,9 +42,44 @@ class ReviewFixTests(unittest.TestCase):
 
         config = json.loads(text[start:end])
 
+        self.assertIn("output_file", config)
         self.assertIn("sources", config)
         self.assertIn("filtering", config)
-        self.assertNotIn("webhook", config)
+
+    def test_output_file_is_required_and_relative_to_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.json"
+            write_json(config, {"output_file": "reports/{run_id}.md"})
+            loaded = load_config(config)
+
+            self.assertEqual(
+                resolve_output_file(
+                    config,
+                    loaded,
+                    run_id="20260817-190532",
+                    date="2026-08-17",
+                ),
+                (root / "reports" / "20260817-190532.md").resolve(),
+            )
+
+            write_json(config, {})
+            with self.assertRaisesRegex(ValueError, "output_file"):
+                load_config(config)
+
+    def test_output_file_expands_braced_environment_variable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.json"
+            write_json(config, {"output_file": "${TEST_DIGEST_ROOT}/{run_id}.md"})
+
+            with mock.patch.dict(os.environ, {"TEST_DIGEST_ROOT": str(root / "reports")}):
+                loaded = load_config(config)
+
+            self.assertEqual(
+                resolve_output_file(config, loaded, run_id="run", date="2026-08-17"),
+                (root / "reports" / "run.md").resolve(),
+            )
 
     def test_url_merge_keeps_distinct_queries(self) -> None:
         items = [
@@ -123,6 +160,7 @@ class ReviewFixTests(unittest.TestCase):
             write_json(
                 config,
                 {
+                    "output_file": str(root / "summary.md"),
                     "filtering": {
                         "ai_score_threshold": 1,
                         "default_group_limit": 1,
@@ -172,7 +210,7 @@ class ReviewFixTests(unittest.TestCase):
             config = root / "config.json"
             items = root / "items.json"
             out = root / "summary.md"
-            write_json(config, {"languages": ["en"]})
+            write_json(config, {"output_file": str(out), "languages": ["en"]})
             write_json(
                 items,
                 [
@@ -200,12 +238,12 @@ class ReviewFixTests(unittest.TestCase):
                 str(config),
                 "--items",
                 str(items),
-                "--out",
-                str(out),
                 "--language",
                 "en",
                 "--date",
                 "2026-06-29",
+                "--run-id",
+                "test-run",
             )
 
             rendered = out.read_text(encoding="utf-8")
@@ -215,6 +253,33 @@ class ReviewFixTests(unittest.TestCase):
             self.assertIn("1. Unsafe ⭐ 7/10", rendered)
             self.assertIn("## Unsafe ⭐ 7/10", rendered)
             self.assertIn('<a href="http://example.com/a)b">&lt;Ref&gt;</a>', rendered)
+
+    def test_render_summary_refuses_to_overwrite_existing_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.json"
+            items = root / "items.json"
+            output = root / "summary.md"
+            write_json(config, {"output_file": str(output), "languages": ["en"]})
+            write_json(items, [])
+            output.write_text("existing report\n", encoding="utf-8")
+
+            with self.assertRaises(subprocess.CalledProcessError):
+                run_script(
+                    "render_summary.py",
+                    "--config",
+                    str(config),
+                    "--items",
+                    str(items),
+                    "--language",
+                    "en",
+                    "--date",
+                    "2026-08-17",
+                    "--run-id",
+                    "test-run",
+                )
+
+            self.assertEqual(output.read_text(encoding="utf-8"), "existing report\n")
 
 if __name__ == "__main__":
     unittest.main()

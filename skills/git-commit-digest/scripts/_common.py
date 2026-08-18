@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import string
 import subprocess
 import tempfile
 import threading
@@ -21,6 +22,8 @@ SCP_URL_RE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:.+$")
 SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 CACHE_FORMAT_VERSION = 2
 OBJECT_ID_RE = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
+OUTPUT_FILE_FIELDS = {"date", "run_id"}
+ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 class GitCommandError(RuntimeError):
@@ -44,6 +47,32 @@ def iso_now() -> str:
 def load_json(path: str | Path) -> Any:
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def expand_env(value: Any) -> Any:
+    if isinstance(value, str):
+        return ENV_RE.sub(lambda match: os.environ.get(match.group(1), match.group(0)), value)
+    if isinstance(value, list):
+        return [expand_env(item) for item in value]
+    if isinstance(value, dict):
+        return {key: expand_env(item) for key, item in value.items()}
+    return value
+
+
+def find_unresolved_env(value: Any) -> set[str]:
+    if isinstance(value, str):
+        return set(ENV_RE.findall(value))
+    if isinstance(value, list):
+        names: set[str] = set()
+        for item in value:
+            names.update(find_unresolved_env(item))
+        return names
+    if isinstance(value, dict):
+        names = set()
+        for item in value.values():
+            names.update(find_unresolved_env(item))
+        return names
+    return set()
 
 
 def write_json(path: str | Path, payload: Any) -> None:
@@ -115,17 +144,61 @@ def validate_remote_url(value: Any) -> str:
     raise ValueError(f"unsupported Git remote URL: {url!r}")
 
 
-def load_config(path: str | Path) -> list[str]:
-    payload = load_json(path)
-    if not isinstance(payload, list):
-        raise ValueError("config.json must contain a JSON array of Git remote URL strings")
-    urls = [validate_remote_url(value) for value in payload]
+def load_config(path: str | Path) -> dict[str, Any]:
+    payload = expand_env(load_json(path))
+    if not isinstance(payload, dict):
+        raise ValueError("config must be a JSON object")
+    unresolved_env = sorted(find_unresolved_env(payload))
+    if unresolved_env:
+        raise ValueError(f"unresolved environment variables: {', '.join(unresolved_env)}")
+    repositories = payload.get("repositories")
+    if not isinstance(repositories, list):
+        raise ValueError("config.repositories must be a JSON array of Git remote URL strings")
+    urls = [validate_remote_url(value) for value in repositories]
     if not urls:
-        raise ValueError("config.json must contain at least one Git remote URL")
+        raise ValueError("config.repositories must contain at least one Git remote URL")
     duplicates = sorted({url for url in urls if urls.count(url) > 1})
     if duplicates:
-        raise ValueError(f"config.json contains duplicate repositories: {', '.join(duplicates)}")
-    return urls
+        raise ValueError(f"config contains duplicate repositories: {', '.join(duplicates)}")
+    output_value = payload.get("output_file")
+    if not isinstance(output_value, str) or not output_value.strip():
+        raise ValueError("config.output_file must be a non-empty Markdown path string")
+    fields = {
+        field_name
+        for _, field_name, _, _ in string.Formatter().parse(output_value)
+        if field_name is not None
+    }
+    unsupported = sorted(fields - OUTPUT_FILE_FIELDS)
+    if unsupported:
+        raise ValueError(f"config.output_file contains unsupported fields: {', '.join(unsupported)}")
+    state_value = payload.get("state_directory")
+    if not isinstance(state_value, str) or not state_value.strip():
+        raise ValueError("config.state_directory must be a non-empty path string")
+    state_directory = Path(state_value.strip()).expanduser()
+    if not state_directory.is_absolute():
+        state_directory = Path(path).resolve().parent / state_directory
+    return {
+        "repositories": urls,
+        "output_file": output_value.strip(),
+        "state_directory": str(state_directory.resolve()),
+    }
+
+
+def resolve_output_file(
+    config_path: str | Path,
+    config: dict[str, Any],
+    *,
+    run_id: str,
+    date: str,
+) -> Path:
+    output_value = str(config["output_file"]).format(run_id=run_id, date=date)
+    output = Path(output_value).expanduser()
+    if not output.is_absolute():
+        output = Path(config_path).resolve().parent / output
+    output = output.resolve()
+    if output.suffix.lower() != ".md":
+        raise ValueError(f"config.output_file must resolve to a .md file: {output}")
+    return output
 
 
 def load_state(path: str | Path) -> dict[str, Any]:

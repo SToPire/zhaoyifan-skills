@@ -22,7 +22,7 @@ import fetch_commits  # noqa: E402
 import _finalize  # noqa: E402
 import _common  # noqa: E402
 import commit_state  # noqa: E402
-from _common import load_config, run_git_stdout_limited  # noqa: E402
+from _common import load_config, resolve_output_file, run_git_stdout_limited  # noqa: E402
 from render_digest import range_label  # noqa: E402
 
 
@@ -44,6 +44,22 @@ def write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
+def write_digest_config(
+    path: Path,
+    repositories: list[str],
+    state_directory: Path,
+    output_file: str | None = None,
+) -> None:
+    write_json(
+        path,
+        {
+            "repositories": repositories,
+            "output_file": output_file or str(state_directory / "reports" / "{run_id}.md"),
+            "state_directory": str(state_directory),
+        },
+    )
+
+
 def commit(
     repo: Path,
     filename: str,
@@ -63,17 +79,63 @@ def commit(
 
 
 class GitCommitDigestWorkflowTests(unittest.TestCase):
-    def test_config_is_only_a_url_array(self) -> None:
+    def test_config_requires_repositories_output_file_and_state_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             valid = root / "valid.json"
             invalid = root / "invalid.json"
-            write_json(valid, ["https://github.com/example/project.git"])
-            write_json(invalid, {"repositories": ["https://github.com/example/project.git"]})
+            write_json(
+                valid,
+                {
+                    "repositories": ["https://github.com/example/project.git"],
+                    "output_file": "reports/{run_id}.md",
+                    "state_directory": "state",
+                },
+            )
+            write_json(invalid, ["https://github.com/example/project.git"])
 
-            self.assertEqual(load_config(valid), ["https://github.com/example/project.git"])
-            with self.assertRaisesRegex(ValueError, "JSON array"):
+            loaded = load_config(valid)
+            self.assertEqual(
+                loaded,
+                {
+                    "repositories": ["https://github.com/example/project.git"],
+                    "output_file": "reports/{run_id}.md",
+                    "state_directory": str((root / "state").resolve()),
+                },
+            )
+            self.assertEqual(
+                resolve_output_file(
+                    valid,
+                    loaded,
+                    run_id="20260817-190532",
+                    date="2026-08-17",
+                ),
+                (root / "reports" / "20260817-190532.md").resolve(),
+            )
+            with self.assertRaisesRegex(ValueError, "JSON object"):
                 load_config(invalid)
+
+    def test_config_expands_braced_environment_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config.json"
+            write_json(
+                config,
+                {
+                    "repositories": ["https://github.com/example/project.git"],
+                    "output_file": "${TEST_DIGEST_ROOT}/reports/{run_id}.md",
+                    "state_directory": "${TEST_DIGEST_ROOT}/state",
+                },
+            )
+
+            with mock.patch.dict(os.environ, {"TEST_DIGEST_ROOT": str(root)}):
+                loaded = load_config(config)
+
+            self.assertEqual(loaded["state_directory"], str((root / "state").resolve()))
+            self.assertEqual(
+                resolve_output_file(config, loaded, run_id="run", date="2026-08-17"),
+                (root / "reports" / "run.md").resolve(),
+            )
 
     def test_first_run_backfill_traverses_the_complete_commit_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -453,14 +515,17 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             root = Path(temporary)
             state = root / "state.json"
             base = root / "base.json"
+            config = root / "config.json"
+            url = "https://example.com/project.git"
             payload = {
                 "repositories": {
-                    "https://example.com/project.git": {
+                    url: {
                         "branch": "main",
                         "head": "a" * 40,
                     }
                 }
             }
+            write_digest_config(config, [url], root)
             write_json(state, payload)
             write_json(base, payload)
             staged_report = root / "report.md"
@@ -474,12 +539,14 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                     str(root / "missing.json"),
                     "--base-state",
                     str(base),
-                    "--state",
-                    str(state),
+                    "--config",
+                    str(config),
                     "--report",
                     str(staged_report),
-                    "--publish-report",
-                    str(published_report),
+                    "--run-id",
+                    "run",
+                    "--date",
+                    "2026-08-17",
                 ],
                 text=True,
                 capture_output=True,
@@ -495,12 +562,14 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             base = root / "base.json"
             pending = root / "pending.json"
             url = "https://example.com/project.git"
+            config = root / "config.json"
             base_payload = {"repositories": {url: {"branch": "main", "head": "a" * 40}}}
             newer_payload = {"repositories": {url: {"branch": "main", "head": "c" * 40}}}
             stale_pending = {"repositories": {url: {"branch": "main", "head": "b" * 40}}}
             write_json(base, base_payload)
             write_json(state, newer_payload)
             write_json(pending, stale_pending)
+            write_digest_config(config, [url], root)
             staged_report = root / "report.md"
             staged_report.write_text("report\n", encoding="utf-8")
             published_report = root / "reports" / "run.md"
@@ -512,12 +581,14 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                     str(pending),
                     "--base-state",
                     str(base),
-                    "--state",
-                    str(state),
+                    "--config",
+                    str(config),
                     "--report",
                     str(staged_report),
-                    "--publish-report",
-                    str(published_report),
+                    "--run-id",
+                    "run",
+                    "--date",
+                    "2026-08-17",
                 ],
                 text=True,
                 capture_output=True,
@@ -536,11 +607,13 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             staged_report = root / "report.md"
             published_report = root / "reports" / "run.md"
             url = "https://example.com/project.git"
+            config = root / "config.json"
             base_payload = {"repositories": {url: {"branch": "main", "head": "a" * 40}}}
             pending_payload = {"repositories": {url: {"branch": "main", "head": "b" * 40}}}
             write_json(state, base_payload)
             write_json(base, base_payload)
             write_json(pending, pending_payload)
+            write_digest_config(config, [url], root)
             staged_report.write_text("new report\n", encoding="utf-8")
             published_report.parent.mkdir(parents=True)
             published_report.write_text("existing report\n", encoding="utf-8")
@@ -552,12 +625,14 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                     str(pending),
                     "--base-state",
                     str(base),
-                    "--state",
-                    str(state),
+                    "--config",
+                    str(config),
                     "--report",
                     str(staged_report),
-                    "--publish-report",
-                    str(published_report),
+                    "--run-id",
+                    "run",
+                    "--date",
+                    "2026-08-17",
                 ],
                 text=True,
                 capture_output=True,
@@ -575,11 +650,13 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             staged_report = root / "run" / "report.md"
             published_report = root / "reports" / "run.md"
             url = "https://example.com/project.git"
+            config = root / "config.json"
             base_payload = {"repositories": {url: {"branch": "main", "head": "a" * 40}}}
             pending_payload = {"repositories": {url: {"branch": "main", "head": "b" * 40}}}
             write_json(state, base_payload)
             write_json(base, base_payload)
             write_json(pending, pending_payload)
+            write_digest_config(config, [url], root)
             staged_report.parent.mkdir(parents=True)
             staged_report.write_text("recoverable report\n", encoding="utf-8")
 
@@ -589,12 +666,14 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                 str(pending),
                 "--base-state",
                 str(base),
-                "--state",
-                str(state),
+                "--config",
+                str(config),
                 "--report",
                 str(staged_report),
-                "--publish-report",
-                str(published_report),
+                "--run-id",
+                "run",
+                "--date",
+                "2026-08-17",
             ]
             with (
                 mock.patch.object(sys, "argv", arguments),
@@ -895,16 +974,12 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             state = work / "state.json"
             cache = work / "mirrors"
             first_run = work / "runs" / "first"
-            write_json(config, [source.as_uri()])
+            write_digest_config(config, [source.as_uri()], work)
 
             run_script(
                 "fetch_commits.py",
                 "--config",
                 str(config),
-                "--state",
-                str(state),
-                "--cache-dir",
-                str(cache),
                 "--out",
                 str(first_run / "raw_commits.json"),
                 "--base-state-out",
@@ -1015,12 +1090,14 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                 str(first_run / "next_state.json"),
                 "--base-state",
                 str(first_run / "base_state.json"),
-                "--state",
-                str(state),
+                "--config",
+                str(config),
                 "--report",
                 str(report),
-                "--publish-report",
-                str(published_report),
+                "--run-id",
+                "first",
+                "--date",
+                "2026-08-07",
             )
             saved_state = json.loads(state.read_text(encoding="utf-8"))
             self.assertEqual(saved_state["repositories"][source.as_uri()]["head"], first_sha)
@@ -1032,10 +1109,6 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                 "fetch_commits.py",
                 "--config",
                 str(config),
-                "--state",
-                str(state),
-                "--cache-dir",
-                str(cache),
                 "--out",
                 str(second_run / "raw_commits.json"),
                 "--base-state-out",
@@ -1124,15 +1197,11 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
 
             work = root / "work"
             config = work / "config.json"
-            write_json(config, [source.as_uri()])
+            write_digest_config(config, [source.as_uri()], work)
             run_script(
                 "fetch_commits.py",
                 "--config",
                 str(config),
-                "--state",
-                str(work / "state.json"),
-                "--cache-dir",
-                str(work / "mirrors"),
                 "--out",
                 str(work / "raw.json"),
                 "--base-state-out",
@@ -1196,7 +1265,7 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             config = root / "config.json"
             state = root / "state.json"
             pending = root / "pending.json"
-            write_json(config, [missing_remote])
+            write_digest_config(config, [missing_remote], root)
             write_json(
                 state,
                 {
@@ -1212,10 +1281,6 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                 "fetch_commits.py",
                 "--config",
                 str(config),
-                "--state",
-                str(state),
-                "--cache-dir",
-                str(root / "mirrors"),
                 "--out",
                 str(root / "raw.json"),
                 "--base-state-out",

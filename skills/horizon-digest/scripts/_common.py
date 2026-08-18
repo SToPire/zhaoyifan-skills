@@ -2,6 +2,7 @@ import html
 import json
 import os
 import re
+import string
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,22 @@ def expand_env(value: Any) -> Any:
     return value
 
 
+def find_unresolved_env(value: Any) -> set[str]:
+    if isinstance(value, str):
+        return set(ENV_RE.findall(value))
+    if isinstance(value, list):
+        names: set[str] = set()
+        for item in value:
+            names.update(find_unresolved_env(item))
+        return names
+    if isinstance(value, dict):
+        names = set()
+        for item in value.values():
+            names.update(find_unresolved_env(item))
+        return names
+    return set()
+
+
 def load_json(path: str | Path) -> Any:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -34,8 +51,45 @@ def write_json(path: str | Path, payload: Any) -> None:
         f.write("\n")
 
 
+OUTPUT_FILE_FIELDS = {"date", "run_id"}
+
+
 def load_config(path: str | Path) -> dict[str, Any]:
-    return expand_env(load_json(path))
+    config = expand_env(load_json(path))
+    if not isinstance(config, dict):
+        raise ValueError("config must be a JSON object")
+    unresolved_env = sorted(find_unresolved_env(config))
+    if unresolved_env:
+        raise ValueError(f"unresolved environment variables: {', '.join(unresolved_env)}")
+    output_value = config.get("output_file")
+    if not isinstance(output_value, str) or not output_value.strip():
+        raise ValueError("config.output_file must be a non-empty Markdown path string")
+    fields = {
+        field_name
+        for _, field_name, _, _ in string.Formatter().parse(output_value)
+        if field_name is not None
+    }
+    unsupported = sorted(fields - OUTPUT_FILE_FIELDS)
+    if unsupported:
+        raise ValueError(f"config.output_file contains unsupported fields: {', '.join(unsupported)}")
+    return config
+
+
+def resolve_output_file(
+    config_path: str | Path,
+    config: dict[str, Any],
+    *,
+    run_id: str,
+    date: str,
+) -> Path:
+    output_value = str(config["output_file"]).format(run_id=run_id, date=date)
+    output = Path(output_value).expanduser()
+    if not output.is_absolute():
+        output = Path(config_path).resolve().parent / output
+    output = output.resolve()
+    if output.suffix.lower() != ".md":
+        raise ValueError(f"config.output_file must resolve to a .md file: {output}")
+    return output
 
 
 def load_items(path: str | Path) -> list[dict[str, Any]]:

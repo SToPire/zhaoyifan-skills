@@ -75,5 +75,3 @@ Write either a JSON array or an object with an `items` array:
 ```
 
 For Chinese digests, `_zh` fields are required. `_en` fields are optional but useful for future bilingual output. `sources` is optional and should only include URLs that were actually inspected.
-
-Webhook message and result schemas belong to the internal `send-webhook` dependency rather than this skill.
