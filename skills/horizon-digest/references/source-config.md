@@ -1,12 +1,13 @@
 # Source Config
 
-Use a JSON config file with source settings and digest filtering rules. Environment variables in string values may use `${VAR_NAME}` and are expanded by the fetch script.
+Use a JSON config file with source settings, filtering rules, and the final Markdown path. String values may reference environment variables as `${VAR_NAME}`.
 
 Starter config:
 
 ```json
 {
   "version": "1.0",
+  "output_file": "/path/to/horizon-digest/{run_id}.md",
   "languages": ["zh"],
   "sources": {
     "github": [
@@ -78,11 +79,11 @@ Supported source types in the first version:
 - `reddit`: public subreddit JSON.
 - `ossinsight`: OSS Insight trending repositories.
 
+`output_file` is required and must resolve to a `.md` file. It may contain `{run_id}` and `{date}` placeholders. Resolve a relative path against the directory containing this config file. Refuse to overwrite an existing output file.
+
 Optional environment variables:
 
 - `GITHUB_TOKEN`: increases GitHub rate limits.
 - Any variable referenced inside RSS URLs, such as `${LWN_KEY}`.
-
-Keep webhook target settings outside this source config. Optional delivery uses the internal `send-webhook` dependency and its dedicated config.
 
 Source failures should be recorded as warnings and should not abort the whole digest unless no items are fetched.

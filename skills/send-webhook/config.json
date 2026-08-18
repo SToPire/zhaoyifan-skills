@@ -1,0 +1,32 @@
+{
+  "version": "1.0",
+  "name": "hiboard",
+  "enabled": true,
+  "url_env": "HIBOARD_WEBHOOK_URL",
+  "method": "POST",
+  "headers": {
+    "x-trace-id": "#{content_sha256}"
+  },
+  "request_body": {
+    "data": {
+      "authCode": "${HIBOARD_AUTH_CODE}",
+      "msgContent": [
+        {
+          "msgId": "#{content_sha256}",
+          "scheduleTaskId": "#{content_sha256}",
+          "scheduleTaskName": "#{content_title}",
+          "summary": "#{content_title}",
+          "result": "success",
+          "content": "#{content}",
+          "source": "#{target_name}",
+          "taskFinishTime": "#{timestamp}"
+        }
+      ]
+    }
+  },
+  "success_body_contains": [
+    "0000000000",
+    "OK"
+  ],
+  "timeout_seconds": 30
+}

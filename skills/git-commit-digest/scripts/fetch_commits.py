@@ -640,20 +640,25 @@ def fetch_repository(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch newly reachable commits from configured Git repositories.")
-    parser.add_argument("--config", required=True, help="JSON array of Git remote URLs")
-    parser.add_argument("--state", required=True, help="Persistent state.json path")
-    parser.add_argument("--cache-dir", required=True, help="Directory for bare Git caches")
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="JSON object containing repositories, output_file, and state_directory",
+    )
     parser.add_argument("--out", required=True, help="Output raw_commits.json path")
     parser.add_argument("--base-state-out", required=True, help="State snapshot used for compare-and-swap")
     parser.add_argument("--next-state-out", required=True, help="Pending state output path")
     parser.add_argument("--meta-out", required=True, help="Run metadata output path")
     args = parser.parse_args()
 
-    recover_finalization(args.state)
-    urls = load_config(args.config)
+    config = load_config(args.config)
+    urls = config["repositories"]
+    state_path = Path(config["state_directory"]) / "state.json"
+    cache_dir = Path(config["state_directory"]) / "mirrors"
+    recover_finalization(state_path)
     run_started_at = utc_now()
     state, initialization_errors = ensure_initial_subscriptions(
-        args.state,
+        state_path,
         urls,
         run_started_at,
     )
@@ -662,8 +667,6 @@ def main() -> None:
     repositories: list[dict[str, Any]] = []
     warnings: list[str] = []
     fetch_truncations: list[dict[str, Any]] = []
-    cache_dir = Path(args.cache_dir)
-
     for url in urls:
         try:
             if url in initialization_errors:

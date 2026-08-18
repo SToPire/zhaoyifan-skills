@@ -1,4 +1,4 @@
 interface:
   display_name: "Send Webhook"
-  short_description: "Send rendered reports through configured webhooks"
-  default_prompt: "Use $send-webhook to deliver a rendered report through a configured webhook and record the result."
+  short_description: "Send Markdown files through configured webhooks"
+  default_prompt: "Use $send-webhook to send an existing Markdown file through a configured webhook and record the result."
