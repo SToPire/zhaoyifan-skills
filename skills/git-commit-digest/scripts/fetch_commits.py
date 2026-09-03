@@ -554,11 +554,13 @@ def fetch_repository(
     state: dict[str, Any],
     cache_dir: Path,
     run_started_at: datetime | None = None,
+    project_name: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     if run_started_at is None:
         run_started_at = utc_now()
     repo_id = repository_id(url)
     name = repository_name(url)
+    project_name = project_name or name
     previous_entry = state["repositories"].get(url)
     previous_head = previous_entry.get("head") if previous_entry else None
     initial_head = previous_entry.get("initial_head") if previous_entry else None
@@ -619,6 +621,7 @@ def fetch_repository(
     result = {
         "id": repo_id,
         "name": name,
+        "project_name": project_name,
         "url": url,
         "branch": branch,
         "previous_head": previous_head,
@@ -653,6 +656,7 @@ def main() -> None:
 
     config = load_config(args.config)
     urls = config["repositories"]
+    project_names = config["project_names"]
     state_path = Path(config["state_directory"]) / "state.json"
     cache_dir = Path(config["state_directory"]) / "mirrors"
     recover_finalization(state_path)
@@ -668,6 +672,7 @@ def main() -> None:
     warnings: list[str] = []
     fetch_truncations: list[dict[str, Any]] = []
     for url in urls:
+        project_name = project_names[url]
         try:
             if url in initialization_errors:
                 raise RuntimeError(initialization_errors[url])
@@ -676,19 +681,24 @@ def main() -> None:
                 state,
                 cache_dir,
                 run_started_at,
+                project_name,
             )
             repositories.append(repository)
             next_state["repositories"][url] = next_entry
             if repository["force_push"]:
-                warnings.append(f"{repository['name']}: default branch history was rewritten")
+                warnings.append(
+                    f"{repository['project_name']}: default branch history was rewritten"
+                )
             if repository["branch_changed"]:
                 warnings.append(
-                    f"{repository['name']}: default branch changed to {repository['branch']}"
+                    f"{repository['project_name']}: default branch changed to "
+                    f"{repository['branch']}"
                 )
             truncated_count = sum(commit.get("patch_truncated", False) for commit in repository["commits"])
             if truncated_count:
                 warnings.append(
-                    f"{repository['name']}: {truncated_count} commit patch(es) were truncated"
+                    f"{repository['project_name']}: {truncated_count} commit patch(es) "
+                    "were truncated"
                 )
             for commit in repository["commits"]:
                 truncated_fields = {
@@ -711,7 +721,8 @@ def main() -> None:
             )
             if message_truncated_count:
                 warnings.append(
-                    f"{repository['name']}: {message_truncated_count} commit message(s) were truncated"
+                    f"{repository['project_name']}: {message_truncated_count} commit "
+                    "message(s) were truncated"
                 )
             metadata_truncated_count = sum(
                 bool(commit.get("identities_truncated") or commit.get("parents_truncated"))
@@ -719,14 +730,16 @@ def main() -> None:
             )
             if metadata_truncated_count:
                 warnings.append(
-                    f"{repository['name']}: {metadata_truncated_count} commit metadata record(s) were truncated"
+                    f"{repository['project_name']}: {metadata_truncated_count} commit "
+                    "metadata record(s) were truncated"
                 )
             files_truncated_count = sum(
                 commit.get("files_truncated", False) for commit in repository["commits"]
             )
             if files_truncated_count:
                 warnings.append(
-                    f"{repository['name']}: {files_truncated_count} commit file list(s) were truncated"
+                    f"{repository['project_name']}: {files_truncated_count} commit file "
+                    "list(s) were truncated"
                 )
         except Exception as exc:
             state_entry = state["repositories"].get(url)
@@ -736,6 +749,7 @@ def main() -> None:
                 {
                     "id": repository_id(url),
                     "name": repository_name(url),
+                    "project_name": project_name,
                     "url": url,
                     "branch": None,
                     "previous_head": (state_entry or {}).get("head"),
@@ -750,7 +764,7 @@ def main() -> None:
                     "commits": [],
                 }
             )
-            warnings.append(f"{repository_name(url)}: {exc}")
+            warnings.append(f"{project_name}: {exc}")
 
     payload = {
         "generated_at": run_started_at.isoformat(),

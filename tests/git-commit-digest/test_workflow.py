@@ -49,11 +49,13 @@ def write_digest_config(
     repositories: list[str],
     state_directory: Path,
     output_file: str | None = None,
+    project_names: dict[str, str] | None = None,
 ) -> None:
     write_json(
         path,
         {
             "repositories": repositories,
+            "project_names": project_names or {},
             "output_file": output_file or str(state_directory / "reports" / "{run_id}.md"),
             "state_directory": str(state_directory),
         },
@@ -99,6 +101,9 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
                 loaded,
                 {
                     "repositories": ["https://github.com/example/project.git"],
+                    "project_names": {
+                        "https://github.com/example/project.git": "project"
+                    },
                     "output_file": "reports/{run_id}.md",
                     "state_directory": str((root / "state").resolve()),
                 },
@@ -114,6 +119,26 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "JSON object"):
                 load_config(invalid)
+
+    def test_config_accepts_report_facing_project_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config.json"
+            url = "https://github.com/e2b-dev/infra.git"
+            write_json(
+                config,
+                {
+                    "repositories": [url],
+                    "project_names": {url: "E2B"},
+                    "output_file": "reports/{run_id}.md",
+                    "state_directory": "state",
+                },
+            )
+
+            loaded = load_config(config)
+
+            self.assertEqual(loaded["repositories"], [url])
+            self.assertEqual(loaded["project_names"], {url: "E2B"})
 
     def test_config_expands_braced_environment_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -941,6 +966,7 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
         repositories = [
             {
                 "name": "linux",
+                "project_name": "Linux",
                 "status": "success",
                 "first_run": False,
                 "coverage": {"mode": "incremental"},
@@ -957,7 +983,7 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
         ]
         self.assertEqual(
             range_label(repositories),
-            "linux：上次成功状态；erofs-utils：自 2026-08-06T12:00+00:00 → 本次运行",
+            "Linux：上次成功状态；erofs-utils：自 2026-08-06T12:00+00:00 → 本次运行",
         )
 
     def test_end_to_end_incremental_workflow(self) -> None:
@@ -974,7 +1000,12 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             state = work / "state.json"
             cache = work / "mirrors"
             first_run = work / "runs" / "first"
-            write_digest_config(config, [source.as_uri()], work)
+            write_digest_config(
+                config,
+                [source.as_uri()],
+                work,
+                project_names={source.as_uri(): "E2B"},
+            )
 
             run_script(
                 "fetch_commits.py",
@@ -993,6 +1024,8 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             repository = raw["repositories"][0]
             self.assertEqual(repository["status"], "success", repository.get("error"))
             self.assertEqual(repository["branch"], "main")
+            self.assertEqual(repository["name"], "source")
+            self.assertEqual(repository["project_name"], "E2B")
             self.assertEqual([item["sha"] for item in repository["commits"]], [first_sha])
             self.assertTrue(repository["first_run"])
 
@@ -1008,6 +1041,10 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             )
             batch_index = json.loads((batches / "index.json").read_text(encoding="utf-8"))
             self.assertEqual(len(batch_index["batches"]), 1)
+            batch = json.loads(
+                (batches / batch_index["batches"][0]["file"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(batch["repository"]["project_name"], "E2B")
 
             commit_ids = [item["id"] for item in repository["commits"]]
             write_json(
@@ -1037,7 +1074,7 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             write_json(
                 first_run / "digest.json",
                 {
-                    "overview": ["source 仓库增加了一项核心行为。"],
+                    "overview": ["E2B 增加了一项核心行为。"],
                     "repositories": [
                         {
                             "id": repository["id"],
@@ -1080,7 +1117,11 @@ class GitCommitDigestWorkflowTests(unittest.TestCase):
             rendered = report.read_text(encoding="utf-8")
             self.assertIn("# Git Commit Digest · 2026-08-07", rendered)
             self.assertIn("范围：首次订阅自 ", rendered)
+            self.assertIn("| 项目 | 分支 | 新增 Commit | 变更主题 | 状态 |", rendered)
+            self.assertIn("| E2B | main | 1 | 1 | 成功 |", rendered)
             self.assertIn("## 今日概览", rendered)
+            self.assertIn("## E2B", rendered)
+            self.assertNotIn("## source", rendered)
             self.assertIn("### core：增加第一项行为", rendered)
             self.assertNotIn("异常与限制", rendered)
 

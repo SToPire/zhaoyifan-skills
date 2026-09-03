@@ -61,6 +61,7 @@ The fetcher records combined (`--cc`) file statistics and a combined patch only 
 
 After validating per-commit analyses, group commits within each repository:
 
+- Use `repository.project_name` whenever the project is named in the global overview or repository overview. Do not substitute the technical `repository.name` slug when the two differ.
 - Group commits that address one technical objective or belong to one subsystem topic.
 - Use merge context when it explains a coherent imported series.
 - Keep unrelated fixes separate even if they share an author or date.

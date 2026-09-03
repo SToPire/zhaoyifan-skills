@@ -35,6 +35,12 @@ def status_label(repository: dict[str, Any]) -> str:
     return "成功"
 
 
+def repository_label(repository: dict[str, Any]) -> str:
+    return safe_text(
+        repository.get("project_name") or repository.get("name") or "repository"
+    )
+
+
 def coverage_boundary(value: Any) -> str:
     if not isinstance(value, str):
         raise ValueError("initial_since coverage requires a since timestamp")
@@ -61,7 +67,7 @@ def repository_range(repository: dict[str, Any], include_name: bool = False) -> 
     else:
         raise ValueError(f"unsupported repository coverage mode: {mode!r}")
     if include_name:
-        return f"{safe_text(repository.get('name') or 'repository')}：{label}"
+        return f"{repository_label(repository)}：{label}"
     return label
 
 
@@ -104,7 +110,7 @@ def render(raw: dict[str, Any], digest: dict[str, Any], date: str | None = None)
         f"生成时间：{generated.strftime('%Y-%m-%d %H:%M')}",
         f"范围：{range_label(repositories)}",
         "",
-        "| 仓库 | 分支 | 新增 Commit | 变更主题 | 状态 |",
+        "| 项目 | 分支 | 新增 Commit | 变更主题 | 状态 |",
         "| --- | --- | ---: | ---: | --- |",
     ]
     for repository in repositories:
@@ -112,7 +118,7 @@ def render(raw: dict[str, Any], digest: dict[str, Any], date: str | None = None)
         group_count = len(grouped.get("groups", [])) if isinstance(grouped, dict) else 0
         lines.append(
             "| {name} | {branch} | {commits} | {groups} | {status} |".format(
-                name=safe_text(repository.get("name")),
+                name=repository_label(repository),
                 branch=safe_text(repository.get("branch") or "—"),
                 commits=len(repository.get("commits", [])),
                 groups=group_count,
@@ -137,7 +143,7 @@ def render(raw: dict[str, Any], digest: dict[str, Any], date: str | None = None)
         lines.extend(
             [
                 "",
-                f"## {safe_text(repository.get('name'))}",
+                f"## {repository_label(repository)}",
                 "",
                 f"新增 {len(commits)} 个 Commit，归纳为 {len(groups)} 个变更主题。{safe_text(repo_digest['overview'])}",
             ]

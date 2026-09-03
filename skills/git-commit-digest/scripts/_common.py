@@ -160,6 +160,17 @@ def load_config(path: str | Path) -> dict[str, Any]:
     duplicates = sorted({url for url in urls if urls.count(url) > 1})
     if duplicates:
         raise ValueError(f"config contains duplicate repositories: {', '.join(duplicates)}")
+    raw_project_names = payload.get("project_names", {})
+    if not isinstance(raw_project_names, dict):
+        raise ValueError("config.project_names must be an object mapping repository URLs to names")
+    project_names = {url: repository_name(url) for url in urls}
+    for raw_url, raw_project_name in raw_project_names.items():
+        url = validate_remote_url(raw_url)
+        if url not in project_names:
+            raise ValueError(f"config.project_names references an unsubscribed repository: {url}")
+        if not isinstance(raw_project_name, str) or not raw_project_name.strip():
+            raise ValueError(f"config.project_names[{url!r}] must be a non-empty string")
+        project_names[url] = " ".join(raw_project_name.split())
     output_value = payload.get("output_file")
     if not isinstance(output_value, str) or not output_value.strip():
         raise ValueError("config.output_file must be a non-empty Markdown path string")
@@ -179,6 +190,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
         state_directory = Path(path).resolve().parent / state_directory
     return {
         "repositories": urls,
+        "project_names": project_names,
         "output_file": output_value.strip(),
         "state_directory": str(state_directory.resolve()),
     }

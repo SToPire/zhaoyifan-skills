@@ -85,7 +85,7 @@ When no commits were fetched, write:
 
 ## Script-Generated Files
 
-- `raw_commits.json`: repository metadata, exact coverage metadata, bounded commit messages/file lists/patches with truncation flags, and per-repository status.
+- `raw_commits.json`: repository metadata, including the technical `name` slug and report-facing `project_name`, exact coverage metadata, bounded commit messages/file lists/patches with truncation flags, and per-repository status.
 - `analyzed_commits.json`: `raw_commits.json` with validated `analysis` objects merged into commits.
 - `validated_digest.json`: normalized and coverage-checked digest input.
 - `base_state.json`: validated state snapshot read at fetch time; compare it during state promotion.

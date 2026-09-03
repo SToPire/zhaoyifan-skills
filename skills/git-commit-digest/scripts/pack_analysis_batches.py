@@ -209,6 +209,7 @@ def main() -> None:
         repo_context = {
             "id": repository.get("id"),
             "name": repository.get("name"),
+            "project_name": repository.get("project_name") or repository.get("name"),
             "url": repository.get("url"),
             "branch": repository.get("branch"),
             "first_run": repository.get("first_run", False),

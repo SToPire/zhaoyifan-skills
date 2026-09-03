@@ -23,6 +23,7 @@ Use each script's `--help` for its exact CLI contract. On compare-and-swap failu
 
 - Use commits and diffs as primary evidence; PRs, issues, and mailing-list threads are optional context.
 - Use merge commits for grouping context and describe merge-resolution changes only when bounded combined evidence exists.
+- Use each repository's `project_name` for report-facing names; `name` is only the remote repository slug.
 - Separate confirmed changes from inferred intent and use Simplified Chinese for generated analysis.
 
 ## Resources
